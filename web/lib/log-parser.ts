@@ -9,6 +9,9 @@ const TIMESTAMP_KEYS = new Set([
   "datetime",
 ]);
 
+// Internal bookkeeping fields added by the parser — never treated as real metrics
+const INTERNAL_NUMERIC_KEYS = new Set(["line_index"]);
+
 const SEVERITY_KEYS = new Set(["level", "lvl", "severity", "priority"]);
 const ENTITY_KEYS = new Set(["service", "svc", "source", "app", "module", "component", "host", "node"]);
 const MESSAGE_KEYS = new Set(["msg", "message", "text", "event", "detail", "description", "error", "reason"]);
@@ -217,7 +220,9 @@ export function parseLogStream(payload: string): ParsedLogDataset {
 
   const numericKeys = Array.from(
     rows.reduce((set, row) => {
-      Object.entries(row.numeric).forEach(([key]) => set.add(key));
+      Object.entries(row.numeric).forEach(([key]) => {
+        if (!INTERNAL_NUMERIC_KEYS.has(key)) set.add(key);
+      });
       return set;
     }, new Set<string>()),
   );
@@ -262,16 +267,44 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     .slice(0, 6);
   const primaryKey = dominantKeys[0] ?? (fieldCoverage[0]?.label ?? "record");
 
+  // Build a meaningful category histogram: prefer severity values, fall back to entity, then format
+  const severityCounts = new Map<string, number>();
+  const entityCounts = new Map<string, number>();
+  rows.forEach((row) => {
+    if (row.severity) severityCounts.set(row.severity, (severityCounts.get(row.severity) ?? 0) + 1);
+    if (row.entity && row.entity !== "unknown" && row.entity !== "unstructured") {
+      entityCounts.set(row.entity, (entityCounts.get(row.entity) ?? 0) + 1);
+    }
+  });
+
+  let histogram: HistogramBar[];
+  let categoryKey: string;
+
+  if (severityCounts.size > 0) {
+    histogram = Array.from(severityCounts.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+    categoryKey = [...SEVERITY_KEYS].find((key) => rows.some((r) => typeof r.fields[key] === "string")) ?? "severity";
+  } else if (entityCounts.size > 0) {
+    histogram = Array.from(entityCounts.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+    categoryKey = [...ENTITY_KEYS].find((key) => rows.some((r) => typeof r.fields[key] === "string")) ?? "service";
+  } else {
+    histogram = formatCoverage;
+    categoryKey = "format";
+  }
+
   return {
     rows,
-    histogram: shapeCoverage,
+    histogram,
     fieldCoverage,
     shapeCoverage,
     formatCoverage,
     series,
     dominantKeys,
     invalidRows: rows.filter((row) => row.format === "text").length,
-    categoryKey: primaryKey,
+    categoryKey,
     primaryKey,
     timestampKey: rows.some((row) => row.timestampLabel.startsWith("row ")) ? "row index" : "timestamp",
   };
