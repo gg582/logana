@@ -350,6 +350,8 @@ body {
 .histogram-bar span,
 .histogram-bar strong {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .histogram-track {
