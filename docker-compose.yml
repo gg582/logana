@@ -1,0 +1,21 @@
+services:
+  c-analytics-node:
+    build:
+      context: .
+    ports:
+      - "23345:23345"
+    volumes:
+      - ./collect.ini:/etc/logana/collect.ini:ro
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 2GB
