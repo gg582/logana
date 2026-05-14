@@ -1,0 +1,48 @@
+<section class="report-shell">
+  <header class="report-hero">
+    <div>
+      <p class="report-kicker">CWIST SSR report</p>
+      <h1>Job {{ jobId }} · {{ algorithm }}</h1>
+      <p class="report-copy">Arbitrary JSON payloads are profiled in C, clustered in the engine, then rendered as server-side HTML.</p>
+    </div>
+    <div class="report-badge report-badge-ready">{{ algorithm }}</div>
+  </header>
+
+  <section class="report-metrics">
+    <article><span>Rows</span><strong>{{ rows }}</strong></article>
+    <article><span>Clusters</span><strong>{{ clusters }}</strong></article>
+    <article><span>Dimensions</span><strong>{{ dimensions }}</strong></article>
+    <article><span>Entropy</span><strong>{{ entropy }}</strong></article>
+    <article><span>Trend</span><strong>{{ trendLabel }}</strong></article>
+    <article><span>Outliers</span><strong>{{ outlierRatio }}</strong></article>
+  </section>
+
+  <section class="report-grid">
+    <article class="report-panel report-panel-wide">
+      <div class="report-panel-head">
+        <h2>Cluster chart</h2>
+        <p>Backend-rendered SVG shipped directly from the C engine.</p>
+      </div>
+      <div class="report-canvas">{{ svg }}</div>
+    </article>
+
+    <article class="report-panel">
+      <div class="report-panel-head">
+        <h2>Detected rules</h2>
+        <p>Heuristics inferred from the analyzed payload.</p>
+      </div>
+      <div class="report-insights">
+        {% for item in insights %}
+          <section class="report-insight report-insight-{{ item.tone }}">
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.detail }}</p>
+          </section>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  {% if error %}
+    <section class="report-error">{{ error }}</section>
+  {% endif %}
+</section>

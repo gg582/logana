@@ -5,17 +5,24 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        build-essential \
-       python3 \
+       cmake \
+       git \
+       libssl-dev \
+       libsqlite3-dev \
        make \
-       nodejs \
        npm \
+       nodejs \
+       python3 \
+       sqlite3 \
+       unzip \
+       wget \
        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
 RUN make -C lib/libttak clean
-RUN make
+RUN make CWIST_SYSTEM_SQLITE=1
 
 WORKDIR /app/web
 RUN npm install
@@ -26,7 +33,9 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends \
+       nodejs \
+       sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build-env /app /app

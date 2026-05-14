@@ -5,6 +5,6 @@ set -euo pipefail
 ENGINE_PID=$!
 
 cd /app/web
-./node_modules/.bin/next start --hostname 0.0.0.0 --port 23345
+node ./server.js
 
 wait "${ENGINE_PID}"

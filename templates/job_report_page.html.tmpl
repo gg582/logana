@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Logana Report {{ jobId }}</title>
+    <style>
+      :root {
+        --bg: #f3ede2;
+        --ink: #171311;
+        --muted: #6f6254;
+        --card: #fffaf1;
+        --line: #d8c9b6;
+        --accent: #c96c4b;
+        --accent-2: #d9a441;
+        --calm: #c6dfd2;
+        --warm: #f1d9aa;
+        --hot: #efc1ad;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(201, 108, 75, 0.18), transparent 24rem),
+          radial-gradient(circle at bottom right, rgba(217, 164, 65, 0.16), transparent 28rem),
+          var(--bg);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", "Noto Sans KR", sans-serif;
+      }
+      .page {
+        width: min(1160px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 48px;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .topbar h1 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .topbar p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 250, 241, 0.78);
+        padding: 10px 14px;
+        font-size: 13px;
+      }
+      .report-shell {
+        display: grid;
+        gap: 22px;
+      }
+      .report-hero,
+      .report-panel,
+      .report-metrics article {
+        border: 1px solid var(--line);
+        background: rgba(255, 250, 241, 0.9);
+        box-shadow: 0 18px 40px rgba(23, 19, 17, 0.07);
+      }
+      .report-hero {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 24px;
+        border-radius: 28px;
+      }
+      .report-kicker {
+        margin: 0 0 10px;
+        color: var(--accent);
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+      .report-hero h1 {
+        margin: 0;
+        font-size: clamp(28px, 5vw, 46px);
+        line-height: 1.02;
+      }
+      .report-copy {
+        max-width: 54rem;
+        margin: 14px 0 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .report-badge {
+        align-self: flex-start;
+        border-radius: 999px;
+        padding: 10px 16px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-weight: 700;
+        border: 1px solid var(--line);
+      }
+      .report-badge-ready { background: var(--calm); }
+      .report-badge-failed { background: var(--hot); }
+      .report-badge-rendering,
+      .report-badge-analyzing,
+      .report-badge-batching,
+      .report-badge-queued { background: var(--warm); }
+      .report-metrics {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .report-metrics article {
+        min-width: 0;
+        padding: 18px;
+        border-radius: 20px;
+      }
+      .report-metrics span {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 10px;
+      }
+      .report-metrics strong {
+        font-size: 22px;
+      }
+      .report-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
+        gap: 18px;
+      }
+      .report-panel {
+        border-radius: 28px;
+        padding: 22px;
+      }
+      .report-panel-head h2,
+      .report-insight h3 {
+        margin: 0;
+      }
+      .report-panel-head p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .report-canvas {
+        margin-top: 18px;
+        overflow: hidden;
+        border-radius: 22px;
+      }
+      .report-canvas svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .report-insights {
+        display: grid;
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .report-insight {
+        border-radius: 20px;
+        padding: 16px;
+      }
+      .report-insight p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+      .report-insight-calm { background: rgba(198, 223, 210, 0.52); }
+      .report-insight-warm { background: rgba(241, 217, 170, 0.56); }
+      .report-insight-hot { background: rgba(239, 193, 173, 0.58); }
+      .report-error {
+        border: 1px solid #d39f92;
+        background: rgba(239, 193, 173, 0.68);
+        border-radius: 18px;
+        padding: 16px 18px;
+      }
+      @media (max-width: 980px) {
+        .report-metrics,
+        .report-grid {
+          grid-template-columns: 1fr;
+        }
+        .report-hero {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div>
+          <h1>Logana · CWIST SSR</h1>
+          <p>Job {{ jobId }} rendered on the C server.</p>
+        </div>
+        <div class="chip">status: {{ status }}</div>
+      </header>
+      {{ body }}
+    </main>
+  </body>
+</html>

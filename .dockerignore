@@ -1,0 +1,6 @@
+.deps/
+.git/
+.next/
+node_modules/
+web/.next/
+web/node_modules/

@@ -1,37 +1,45 @@
-import net from "node:net";
-
-const HOST = "127.0.0.1";
 const PORT = Number(process.env.LOGANA_ENGINE_PORT ?? 24445);
+const BASE_URL = process.env.LOGANA_ENGINE_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 
-function runCommand(head: string, payload?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host: HOST, port: PORT }, () => {
-      socket.write(head + "\n");
-      if (payload) socket.write(payload);
-    });
-    let data = "";
-    socket.on("data", (chunk) => {
-      data += chunk.toString("utf8");
-      if (data.includes("\n")) {
-        socket.end();
-      }
-    });
-    socket.on("end", () => resolve(data.trim()));
-    socket.on("error", reject);
+async function requestJson(path: string, init?: RequestInit) {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
   });
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    throw new Error(typeof data?.error === "string" ? data.error : `engine request failed: ${response.status}`);
+  }
+  return data;
 }
 
 export async function ingestLogs(payload: string, algorithm: string) {
-  const raw = await runCommand(`INGEST ${algorithm} ${Buffer.byteLength(payload, "utf8")}`, payload);
-  return JSON.parse(raw);
+  return requestJson("/ingest", {
+    method: "POST",
+    body: JSON.stringify({ payload, algorithm }),
+  });
 }
 
 export async function getJobStatus(jobId: string) {
-  const raw = await runCommand(`STATUS ${jobId}`);
-  return JSON.parse(raw);
+  return requestJson(`/jobs/${jobId}/status`);
 }
 
 export async function getJobResult(jobId: string) {
-  const raw = await runCommand(`RESULT ${jobId}`);
-  return JSON.parse(raw);
+  return requestJson(`/jobs/${jobId}`);
+}
+
+export async function getJobReport(jobId: string) {
+  const response = await fetch(`${BASE_URL}/jobs/${jobId}/view`, {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`engine report request failed: ${response.status}`);
+  }
+  return response.text();
 }
