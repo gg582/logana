@@ -39,7 +39,7 @@ $(CWIST_STAMP):
 		git clone --depth=1 --branch "$(CWIST_REF)" "$(CWIST_REPO)" "$(CWIST_ROOT)"; \
 	fi
 	@echo "Preparing cwist dependencies..."
-	@git -C "$(CWIST_ROOT)" submodule update --init --depth=1 lib/cjson lib/uriparser lib/libttak
+	@git -C "$(CWIST_ROOT)" submodule update --init --depth=1
 	@touch $@
 
 $(CWIST_SQLITE_STAMP): $(CWIST_STAMP)
