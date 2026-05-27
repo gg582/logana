@@ -115,7 +115,7 @@ cwist_app *cwist_app_auto_create(cwist_app_compat_preset_t preset)
 /*  PQC layer                                                                 */
 /* -------------------------------------------------------------------------- */
 
-void cwist_app_use_pqc_layer(cwist_app *app, bool enabled)
+void logana_app_use_pqc_layer(cwist_app *app, bool enabled)
 {
     if (!app) return;
     cwist_app_preset_state *st = preset_state_ensure(app);

@@ -44,6 +44,71 @@ function escapeXml(value: string) {
 
 /* ─────────── SVG exporters ─────────── */
 
+const DEFAULT_EXPORT_SIZE = { width: 960, height: 560 };
+
+function parseSvgLength(value: string | null) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.endsWith("%")) return null;
+
+  const match = trimmed.match(/^(\d+(?:\.\d+)?|\.\d+)/);
+  if (!match) return null;
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseSvgViewBox(value: string | null) {
+  if (!value) return null;
+
+  const parts = value
+    .trim()
+    .split(/[\s,]+/)
+    .map((part) => Number(part));
+
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
+
+  const [, , width, height] = parts;
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function readSvgExportSize(markup: string) {
+  try {
+    const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg.tagName.toLowerCase() !== "svg") return DEFAULT_EXPORT_SIZE;
+
+    const width = parseSvgLength(svg.getAttribute("width"));
+    const height = parseSvgLength(svg.getAttribute("height"));
+    const viewBox = parseSvgViewBox(svg.getAttribute("viewBox"));
+
+    return {
+      width: Math.round(width ?? viewBox?.width ?? DEFAULT_EXPORT_SIZE.width),
+      height: Math.round(height ?? viewBox?.height ?? DEFAULT_EXPORT_SIZE.height),
+    };
+  } catch {
+    return DEFAULT_EXPORT_SIZE;
+  }
+}
+
+function normalizeSvgForExport(markup: string, size: { width: number; height: number }) {
+  try {
+    const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg.tagName.toLowerCase() !== "svg") return markup;
+
+    svg.setAttribute("width", String(size.width));
+    svg.setAttribute("height", String(size.height));
+    if (!svg.getAttribute("viewBox")) {
+      svg.setAttribute("viewBox", `0 0 ${size.width} ${size.height}`);
+    }
+
+    return new XMLSerializer().serializeToString(svg);
+  } catch {
+    return markup;
+  }
+}
+
 function histogramSvgMarkup(bars: HistogramBar[], title: string, subtitle: string) {
   const width = 960;
   const height = 560;
@@ -352,7 +417,9 @@ function donutSvgMarkup(bars: HistogramBar[], title: string, subtitle: string) {
 }
 
 async function downloadSvgAsPng(markup: string, name: string) {
-  const blob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+  const exportSize = readSvgExportSize(markup);
+  const exportMarkup = normalizeSvgForExport(markup, exportSize);
+  const blob = new Blob([exportMarkup], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -362,11 +429,11 @@ async function downloadSvgAsPng(markup: string, name: string) {
       img.src = url;
     });
     const canvas = document.createElement("canvas");
-    canvas.width = image.width || 960;
-    canvas.height = image.height || 560;
+    canvas.width = exportSize.width;
+    canvas.height = exportSize.height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("canvas context unavailable");
-    context.drawImage(image, 0, 0);
+    context.drawImage(image, 0, 0, exportSize.width, exportSize.height);
     const pngUrl = canvas.toDataURL("image/png");
     const link = document.createElement("a");
     link.href = pngUrl;

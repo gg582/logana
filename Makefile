@@ -16,7 +16,7 @@ INCDIRS  := . include lib/libttak/include $(CWIST_ROOT)/include $(CWIST_ROOT)/li
 
 CFLAGS   ?= -O3 -std=c17 -Wall -Wextra -Wshadow -pthread -D_GNU_SOURCE
 CPPFLAGS += $(addprefix -I,$(INCDIRS))
-LDFLAGS  += -pthread -lm -lsqlite3 -lssl -lcrypto -ldl
+LDFLAGS  += -pthread -lm -lsqlite3 -lssl -lcrypto -ldl -lstdc++ -lz -lcurl -lnghttp2
 
 SRC      := $(sort $(foreach d,$(SRCDIRS),$(wildcard $(d)/*.c)))
 OBJ      := $(patsubst %.c,obj/%.o,$(SRC))
@@ -39,7 +39,7 @@ $(CWIST_STAMP):
 		git clone --depth=1 --branch "$(CWIST_REF)" "$(CWIST_REPO)" "$(CWIST_ROOT)"; \
 	fi
 	@echo "Preparing cwist dependencies..."
-	@git -C "$(CWIST_ROOT)" submodule update --init --depth=1
+	@git -C "$(CWIST_ROOT)" submodule update --init --recursive --depth=1
 	@touch $@
 
 $(CWIST_SQLITE_STAMP): $(CWIST_STAMP)

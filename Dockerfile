@@ -8,8 +8,11 @@ RUN apt-get update \
        cmake \
        git \
        libssl-dev \
+       libcurl4-openssl-dev \
+       libnghttp2-dev \
        libsqlite3-dev \
        make \
+       pkg-config \
        zlib1g-dev \
        npm \
        nodejs \
@@ -35,6 +38,8 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+       libcurl4t64 \
+       libnghttp2-14 \
        nodejs \
        sqlite3 \
     && rm -rf /var/lib/apt/lists/*
