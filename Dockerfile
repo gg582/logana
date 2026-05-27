@@ -10,6 +10,7 @@ RUN apt-get update \
        libssl-dev \
        libsqlite3-dev \
        make \
+       zlib1g-dev \
        npm \
        nodejs \
        python3 \
