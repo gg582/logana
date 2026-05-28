@@ -82,6 +82,8 @@ typedef struct {
 
 typedef struct {
     float *values;
+    uint64_t *timestamps;        /* Normalized epoch milliseconds per row */
+    uint8_t *valid_mask;         /* Per-dimension validity: 1 = valid, 0 = invalid/parsed trap */
     size_t row_count;
     size_t dimensions;
     int *labels;
