@@ -704,6 +704,37 @@ body {
   transform: scale(1.05);
 }
 
+.donut-tooltip {
+  pointer-events: none;
+  position: absolute;
+  z-index: 10;
+  background: rgba(28, 20, 18, 0.96);
+  border: 1px solid rgba(255, 216, 167, 0.2);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  max-width: 360px;
+  font: 500 12px/1.7 var(--font-fira), "IBM Plex Mono", monospace;
+  color: var(--fg);
+  animation: fadeIn 0.15s ease forwards;
+}
+
+.donut-tooltip-head {
+  font-weight: 700;
+  color: var(--accent-soft);
+  margin-bottom: 6px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 216, 167, 0.1);
+  padding-bottom: 4px;
+}
+
+.donut-tooltip-line {
+  color: var(--muted);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
 .heatmap-cell {
   transition:
     transform var(--transition-fast) var(--ease-out-back),

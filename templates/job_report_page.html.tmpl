@@ -176,11 +176,13 @@
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 24px;
-        align-items: start;
+        align-items: stretch;
       }
 
       /* ---------- Panel (single card, no nesting) ---------- */
       .report-panel {
+        display: flex;
+        flex-direction: column;
         border-radius: 24px;
         padding: 28px;
         border: 1px solid var(--line);
@@ -206,6 +208,8 @@
         font-size: 14px;
       }
       .report-canvas {
+        flex: 1;
+        min-height: 0;
         overflow: hidden;
         border-radius: 16px;
         border: 1px solid var(--line);
@@ -219,75 +223,50 @@
       .report-canvas svg {
         display: block;
         width: 100%;
-        height: auto;
+        height: 100%;
       }
 
-      /* ---------- Insights (horizontal table) ---------- */
+      /* ---------- Insights (card grid) ---------- */
       .report-insights {
-        display: block;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
-      .report-insights-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 14px;
+      .report-insight-card {
+        padding: 18px 16px;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: rgba(255, 250, 241, 0.55);
+        transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
       }
-      .report-insights-table-horizontal thead tr {
-        border-bottom: 1px solid var(--line);
+      .report-insight-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(23, 19, 17, 0.05);
+        background: rgba(255, 250, 241, 0.85);
       }
-      .report-insights-table-horizontal th,
-      .report-insights-table-horizontal td {
-        padding: 14px 16px;
-        vertical-align: top;
-        min-width: 140px;
-      }
-      .report-insights-table-horizontal th {
-        text-align: left;
-        font-weight: 700;
+      .report-insight-card h4 {
+        margin: 0 0 8px;
         font-size: 13px;
+        font-weight: 700;
         letter-spacing: 0.02em;
         text-transform: capitalize;
-        white-space: nowrap;
+        color: var(--ink);
       }
-      .report-insights-table-horizontal td {
+      .report-insight-card p {
+        margin: 0;
         color: var(--muted);
-        line-height: 1.6;
-        border-bottom: none;
+        font-size: 14px;
+        line-height: 1.55;
       }
-      .report-insights-table-horizontal tbody tr:hover {
-        background: rgba(255, 250, 241, 0.35);
-      }
-      .report-insight-calm { background: rgba(198, 223, 210, 0.25); }
-      .report-insight-warm { background: rgba(241, 217, 170, 0.28); }
-      .report-insight-hot  { background: rgba(239, 193, 173, 0.30); }
+      .report-insight-calm { background: rgba(198, 223, 210, 0.35); }
+      .report-insight-warm { background: rgba(241, 217, 170, 0.38); }
+      .report-insight-hot  { background: rgba(239, 193, 173, 0.40); }
       @media (max-width: 740px) {
-        .report-insights-table-horizontal thead {
-          display: none;
-        }
-        .report-insights-table-horizontal tbody,
-        .report-insights-table-horizontal tr,
-        .report-insights-table-horizontal td {
-          display: block;
-          width: 100%;
-        }
-        .report-insights-table-horizontal tbody tr {
-          border-bottom: 1px solid var(--line);
-        }
-        .report-insights-table-horizontal td {
-          position: relative;
-          padding: 12px 12px 12px 40%;
-          border-bottom: none;
-          min-width: auto;
-        }
-        .report-insights-table-horizontal td::before {
-          content: attr(data-title);
-          position: absolute;
-          left: 16px;
-          top: 12px;
-          font-weight: 700;
-          color: var(--ink);
-          white-space: nowrap;
+        .report-insights {
+          grid-template-columns: 1fr;
         }
       }
 

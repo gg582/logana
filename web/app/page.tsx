@@ -819,13 +819,15 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
   );
 }
 
-function DonutChart({ bars }: { bars: HistogramBar[] }) {
+function DonutChart({ bars, samples }: { bars: HistogramBar[]; samples?: Map<string, string[]> }) {
   const total = Math.max(bars.reduce((s, b) => s + b.value, 0), 1);
   const colors = ["#ffda7b", "#ff8c6a", "#f45d96", "#7ad7ff", "#8ef0b5", "#c8a4ff", "#ffb3c1", "#a0c4ff"];
   const cx = 120;
   const cy = 120;
   const radius = 90;
   const innerRadius = 56;
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   let startAngle = 0;
   const slices = bars.map((bar, i) => {
@@ -848,35 +850,65 @@ function DonutChart({ bars }: { bars: HistogramBar[] }) {
     return { d, color: colors[i % colors.length], label: bar.label, value: bar.value, lx, ly, midAngle };
   });
 
+  const tooltipLines = hovered ? (samples?.get(hovered) ?? []) : [];
+
   return (
-    <svg viewBox="0 0 340 260" role="img" aria-label="donut chart">
-      {slices.map((s, i) => (
-        <g key={i}>
-          <path className="donut-slice" d={s.d} fill={s.color} opacity={0.92} />
-          <line
-            x1={cx + radius * Math.cos(s.midAngle)}
-            y1={cy + radius * Math.sin(s.midAngle)}
-            x2={s.lx}
-            y2={s.ly}
-            stroke="#4b3a30"
-            strokeWidth="1"
-          />
-          <text
-            x={s.lx + (Math.cos(s.midAngle) > 0 ? 6 : -6)}
-            y={s.ly + 4}
-            textAnchor={Math.cos(s.midAngle) > 0 ? "start" : "end"}
-            fill="#b69774"
-            fontSize="11"
-            fontFamily="ui-monospace, monospace"
-          >
-            {s.label} {s.value}
-          </text>
-        </g>
-      ))}
-      <text x={cx} y={cy + 5} textAnchor="middle" fill="#fff1d6" fontSize="18" fontFamily="ui-monospace, monospace">
-        {bars.length} classes
-      </text>
-    </svg>
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <svg
+        viewBox="0 0 340 260"
+        role="img"
+        aria-label="donut chart"
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        }}
+      >
+        {slices.map((s, i) => (
+          <g key={i}>
+            <path
+              className="donut-slice"
+              d={s.d}
+              fill={s.color}
+              opacity={0.92}
+              onMouseEnter={() => setHovered(s.label)}
+              onMouseLeave={() => setHovered(null)}
+            />
+            <line
+              x1={cx + radius * Math.cos(s.midAngle)}
+              y1={cy + radius * Math.sin(s.midAngle)}
+              x2={s.lx}
+              y2={s.ly}
+              stroke="#4b3a30"
+              strokeWidth="1"
+            />
+            <text
+              x={s.lx + (Math.cos(s.midAngle) > 0 ? 6 : -6)}
+              y={s.ly + 4}
+              textAnchor={Math.cos(s.midAngle) > 0 ? "start" : "end"}
+              fill="#b69774"
+              fontSize="11"
+              fontFamily="ui-monospace, monospace"
+            >
+              {s.label} {s.value}
+            </text>
+          </g>
+        ))}
+        <text x={cx} y={cy + 5} textAnchor="middle" fill="#fff1d6" fontSize="18" fontFamily="ui-monospace, monospace">
+          {bars.length} classes
+        </text>
+      </svg>
+      {hovered && tooltipLines.length > 0 && (
+        <div
+          className="donut-tooltip"
+          style={{ left: mousePos.x + 12, top: mousePos.y + 12 }}
+        >
+          <div className="donut-tooltip-head">{hovered}</div>
+          {tooltipLines.map((line, i) => (
+            <div key={i} className="donut-tooltip-line">{line}</div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1057,18 +1089,28 @@ export default function Home() {
 
   // Build donut candidates from low-cardinality string fields
   const donutCandidates = useMemo(() => {
-    const candidates: { key: string; bars: HistogramBar[] }[] = [];
+    const candidates: { key: string; bars: HistogramBar[]; samples: Map<string, string[]> }[] = [];
     for (const s of analytics.fieldSchemas) {
       if (s.stringCount > 0 && s.uniqueValues.size > 1 && s.uniqueValues.size <= 10) {
         const counts = new Map<string, number>();
+        const samples = new Map<string, string[]>();
         analytics.rows.forEach((row) => {
           const v = row.fields[s.key];
-          if (typeof v === "string") counts.set(v, (counts.get(v) ?? 0) + 1);
+          if (typeof v === "string") {
+            counts.set(v, (counts.get(v) ?? 0) + 1);
+            const list = samples.get(v) ?? [];
+            if (list.length < 5) {
+              const raw = row.message || row.raw || "";
+              const truncated = raw.length > 128 ? raw.slice(0, 128) + "..." : raw;
+              list.push(truncated);
+            }
+            samples.set(v, list);
+          }
         });
         const bars = Array.from(counts.entries())
           .map(([label, value]) => ({ label, value }))
           .sort((a, b) => b.value - a.value);
-        candidates.push({ key: s.key, bars });
+        candidates.push({ key: s.key, bars, samples });
       }
     }
     return candidates.slice(0, 3);
@@ -1221,7 +1263,7 @@ export default function Home() {
 
         {donutCandidates.map((candidate) => (
           <ChartCard key={candidate.key} title={candidate.key} subtitle="Categorical distribution" svgMarkup={donutSvgMarkup(candidate.bars, candidate.key, "Distribution")} downloadName={`donut-${candidate.key}`}>
-            <DonutChart bars={candidate.bars} />
+            <DonutChart bars={candidate.bars} samples={candidate.samples} />
           </ChartCard>
         ))}
 
