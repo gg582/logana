@@ -826,6 +826,64 @@ body {
   margin-top: 24px;
 }
 
+/* ─────────── Rules grid (checkerboard, width-relaxed) ─────────── */
+.rules-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.rules-card {
+  flex: 1 1 280px;
+  min-width: 280px;
+  max-width: 100%;
+  padding: 18px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+  align-self: flex-start;
+}
+
+.rules-card:hover {
+  transform: translateY(-3px);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.rules-card h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+  color: var(--accent-soft);
+}
+
+.rules-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.rules-card-calm {
+  border-color: rgba(142, 240, 181, 0.25);
+  background: rgba(142, 240, 181, 0.06);
+}
+
+.rules-card-warm {
+  border-color: rgba(255, 190, 107, 0.25);
+  background: rgba(255, 190, 107, 0.06);
+}
+
+.rules-card-hot {
+  border-color: rgba(255, 124, 102, 0.25);
+  background: rgba(255, 124, 102, 0.08);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

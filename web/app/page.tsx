@@ -24,6 +24,7 @@ type Result = {
   clusters?: number;
   entropy?: number;
   trendSlope?: number;
+  outlierRatio?: number;
   svg?: string;
   html?: string;
   error?: string;
@@ -580,7 +581,7 @@ function FitText({
 
 /* ─────────── React components ─────────── */
 
-type WindowKey = "input" | "runState" | "analysis" | "schema";
+type WindowKey = "input" | "runState" | "analysis" | "schema" | "rules";
 
 function Chrome({ onClose }: { onClose?: () => void }) {
   return (
@@ -609,6 +610,7 @@ function Dock({
     { key: "runState", label: "State" },
     { key: "analysis", label: "Output" },
     { key: "schema", label: "Schema" },
+    { key: "rules", label: "Rules" },
   ];
 
   return (
@@ -990,6 +992,7 @@ export default function Home() {
     runState: true,
     analysis: true,
     schema: true,
+    rules: true,
   });
 
   const toggleWindow = (key: WindowKey) => {
@@ -997,6 +1000,62 @@ export default function Home() {
   };
 
   const analytics: ParsedLogDataset = useMemo(() => parseLogStream(payload), [payload]);
+
+  const insights = useMemo(() => {
+    if (!result) return [];
+    const items: { title: string; detail: string; tone: "calm" | "warm" | "hot" }[] = [];
+
+    const rows = result.rows ?? 0;
+    const clusters = result.clusters ?? 0;
+    items.push({
+      title: "Segmentation",
+      detail: `${rows} rows were compressed into ${clusters} cluster bands with ${analytics.fieldSchemas.length} numeric dimensions.`,
+      tone: clusters > 1 ? "warm" : "calm",
+    });
+
+    const entropy = result.entropy ?? 0;
+    items.push({
+      title: "Distribution",
+      detail: `Entropy landed at ${entropy.toFixed(3)}, which suggests a ${entropy >= 1.25 ? "broad" : "narrow"} categorical spread in the payload.`,
+      tone: entropy >= 1.25 ? "hot" : "calm",
+    });
+
+    const slope = result.trendSlope ?? 0;
+    const trendLabel = slope > 0.05 ? "Rising" : slope < -0.05 ? "Falling" : "Stable";
+    items.push({
+      title: "Trend",
+      detail: `The dominant trend is ${trendLabel} with slope ${slope.toFixed(4)} across the primary timeline.`,
+      tone: Math.abs(slope) >= 0.05 ? "warm" : "calm",
+    });
+
+    const outlierRatio = result.outlierRatio ?? 0;
+    items.push({
+      title: "Anomaly pressure",
+      detail: `Outliers account for ${(outlierRatio * 100).toFixed(2)}% of the observed rows.`,
+      tone: outlierRatio >= 0.08 ? "hot" : "calm",
+    });
+
+    if (analytics.fieldSchemas.length >= 2) {
+      const dims = analytics.fieldSchemas.filter((s) => s.numericCount > 0).slice(0, 2);
+      if (dims.length >= 2) {
+        items.push({
+          title: "Projection",
+          detail: `A 2D projection of ${dims[0].key} and ${dims[1].key} is rendered. Range: [${dims[0].min?.toFixed(2) ?? 0}, ${dims[0].max?.toFixed(2) ?? 0}] x [${dims[1].min?.toFixed(2) ?? 0}, ${dims[1].max?.toFixed(2) ?? 0}].`,
+          tone: "calm",
+        });
+      }
+    }
+
+    if (outlierRatio >= 0.15) {
+      items.push({
+        title: "Noise signal",
+        detail: `High outlier ratio (${(outlierRatio * 100).toFixed(1)}%) indicates noisy or multi-modal data. Consider tuning epsilon or switching to OPTICS/GMM.`,
+        tone: "hot",
+      });
+    }
+
+    return items;
+  }, [result, analytics.fieldSchemas]);
 
   async function submit() {
     setStatus("submitting");
@@ -1297,6 +1356,28 @@ export default function Home() {
               </div>
             </div>
             <StatsGrid schemas={analytics.fieldSchemas} />
+          </div>
+        </section>
+      )}
+
+      {windows.rules && insights.length > 0 && (
+        <section className="stats-section animate-fade-in-up">
+          <div className="window">
+            <Chrome onClose={() => toggleWindow("rules")} />
+            <div className="window-head">
+              <div>
+                <h2>Detected rules</h2>
+                <p>Heuristics inferred from the analyzed payload.</p>
+              </div>
+            </div>
+            <div className="rules-grid">
+              {insights.map((item) => (
+                <article key={item.title} className={`rules-card rules-card-${item.tone}`}>
+                  <h4>{item.title}</h4>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
       )}
