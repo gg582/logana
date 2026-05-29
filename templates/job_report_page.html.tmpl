@@ -305,5 +305,32 @@
       </header>
       {{ body }}
     </main>
+    <script>
+    (function() {
+      function fit(el, minPx) {
+        var parent = el.parentElement;
+        if (!parent) return;
+        var style = window.getComputedStyle(el);
+        var size = parseFloat(style.fontSize);
+        el.style.whiteSpace = 'nowrap';
+        while (el.scrollWidth > parent.clientWidth && size > minPx) {
+          size -= 0.5;
+          el.style.fontSize = size + 'px';
+        }
+      }
+
+      function run() {
+        var nodes = document.querySelectorAll('.report-metrics strong, .report-metrics span');
+        for (var i = 0; i < nodes.length; i++) fit(nodes[i], 11);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run);
+      } else {
+        run();
+      }
+      window.addEventListener('resize', run);
+    })();
+    </script>
   </body>
 </html>
