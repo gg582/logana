@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Logana Report {{ jobId }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
     <style>
       :root {
         --bg: #f3ede2;
@@ -25,7 +28,7 @@
           radial-gradient(circle at bottom right, rgba(217, 164, 65, 0.16), transparent 28rem),
           var(--bg);
         color: var(--ink);
-        font-family: "IBM Plex Sans", "Noto Sans KR", sans-serif;
+        font-family: "Space Grotesk", "IBM Plex Sans KR", "Noto Sans KR", sans-serif;
         line-height: 1.6;
       }
       .page {
@@ -126,6 +129,7 @@
         display: grid;
         grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 16px;
+        align-items: start;
       }
       .report-metrics article {
         min-width: 0;
@@ -189,7 +193,7 @@
         height: auto;
       }
 
-      /* ---------- Insights (flat list, no nested cards) ---------- */
+      /* ---------- Insights (small cards) ---------- */
       .report-insights {
         display: grid;
         gap: 12px;
@@ -197,6 +201,8 @@
       .report-insight {
         padding: 16px 20px;
         border-radius: 14px;
+        border: 1px solid var(--line);
+        box-shadow: 0 1px 4px rgba(23, 19, 17, 0.04);
       }
       .report-insight h3 {
         margin: 0;

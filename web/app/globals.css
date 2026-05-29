@@ -34,7 +34,7 @@ body {
     radial-gradient(circle at top right, rgba(244, 93, 150, 0.12), transparent 22%),
     linear-gradient(180deg, #201614 0%, #140f10 100%);
   color: var(--fg);
-  font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+  font-family: var(--font-space), var(--font-ibm-plex-kr), "IBM Plex Sans", "Noto Sans KR", sans-serif;
 }
 
 body {
@@ -129,7 +129,7 @@ body {
 .app-shell {
   width: min(1280px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 44px 0 88px;
+  padding: 44px 0 120px;
 }
 
 .hero {
@@ -249,7 +249,7 @@ body {
     rgba(17, 12, 12, 0.92);
   color: var(--fg);
   padding: 18px 20px;
-  font: 500 14px/1.9 "IBM Plex Mono", monospace;
+  font: 500 14px/1.9 var(--font-fira), "IBM Plex Mono", monospace;
   resize: vertical;
   transition:
     border-color var(--transition-base) var(--ease-out-expo),
@@ -363,6 +363,7 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 22px;
+  align-items: start;
 }
 
 .metric {
@@ -469,6 +470,7 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   padding: 20px;
+  align-items: start;
 }
 
 .preview article {
@@ -507,6 +509,7 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
 }
 
 .run-summary div {
@@ -560,6 +563,7 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
   margin-top: 24px;
+  align-items: start;
 }
 
 .viz-card {
@@ -698,7 +702,7 @@ body {
   grid-template-columns: 120px 1fr 48px;
   gap: 12px;
   align-items: center;
-  font: 500 13px/1.8 "IBM Plex Mono", monospace;
+  font: 500 13px/1.8 var(--font-fira), "IBM Plex Mono", monospace;
 }
 
 .histogram-bar span,
@@ -733,7 +737,7 @@ body {
   grid-template-columns: 64px 1fr 48px;
   gap: 12px;
   align-items: center;
-  font: 500 13px/1.8 "IBM Plex Mono", monospace;
+  font: 500 13px/1.8 var(--font-fira), "IBM Plex Mono", monospace;
 }
 
 .boolean-track {
@@ -767,6 +771,7 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
 }
 
 .stats-card {
@@ -800,7 +805,7 @@ body {
 }
 
 .stats-header code {
-  font: 600 13px/1 "IBM Plex Mono", monospace;
+  font: 600 13px/1 var(--font-fira), "IBM Plex Mono", monospace;
   color: var(--accent);
   background: rgba(255, 218, 123, 0.08);
   padding: 4px 8px;
@@ -934,4 +939,69 @@ body {
   .stats-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─────────── macOS-style Dock ─────────── */
+.dock {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 10px 18px;
+  border-radius: 20px;
+  background: rgba(28, 20, 18, 0.88);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+}
+
+.dock-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast) var(--ease-out-expo),
+    color var(--transition-fast) var(--ease-out-expo),
+    transform var(--transition-fast) var(--ease-out-back);
+}
+
+.dock-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg);
+  transform: translateY(-2px);
+}
+
+.dock-active {
+  color: var(--accent-soft);
+}
+
+.dock-active .dock-dot {
+  background: var(--accent-soft);
+  box-shadow: 0 0 8px rgba(255, 227, 165, 0.45);
+}
+
+.dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  transition:
+    background var(--transition-fast) var(--ease-out-expo),
+    box-shadow var(--transition-fast) var(--ease-out-expo);
+}
+
+.dock-label {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }

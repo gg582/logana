@@ -27,7 +27,32 @@ type Result = {
   svg?: string;
   html?: string;
   error?: string;
+  algorithm?: string;
 };
+
+const ALL_ALGORITHMS = [
+  "dbscan",
+  "kmeans++",
+  "birch",
+  "mean_shift",
+  "optics",
+  "gmm",
+  "agglomerative",
+] as const;
+
+function scoreResult(r: Result): number {
+  const clusters = r.clusters ?? 0;
+  const entropy = r.entropy ?? Infinity;
+  const rows = r.rows ?? 0;
+  if (clusters <= 1) return -1000;
+  if (clusters > rows / 2 && rows > 0) return -500;
+  let score = 0;
+  if (clusters >= 2 && clusters <= 6) score += 30;
+  else if (clusters <= 10) score += 20;
+  else score += 10;
+  score -= entropy * 3;
+  return score;
+}
 
 function formatCompactNumber(value: number) {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
@@ -555,13 +580,51 @@ function FitText({
 
 /* ─────────── React components ─────────── */
 
-function Chrome() {
+type WindowKey = "input" | "runState" | "analysis" | "schema";
+
+function Chrome({ onClose }: { onClose?: () => void }) {
   return (
     <div className="chrome">
-      <span className="dot dot-red" />
+      <span
+        className="dot dot-red"
+        onClick={onClose}
+        style={{ cursor: onClose ? "pointer" : "default" }}
+        title={onClose ? "Close" : undefined}
+      />
       <span className="dot dot-yellow" />
       <span className="dot dot-green" />
     </div>
+  );
+}
+
+function Dock({
+  windows,
+  onToggle,
+}: {
+  windows: Record<WindowKey, boolean>;
+  onToggle: (key: WindowKey) => void;
+}) {
+  const items: { key: WindowKey; label: string }[] = [
+    { key: "input", label: "Input" },
+    { key: "runState", label: "State" },
+    { key: "analysis", label: "Output" },
+    { key: "schema", label: "Schema" },
+  ];
+
+  return (
+    <nav className="dock">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className={`dock-item ${windows[item.key] ? "dock-active" : ""}`}
+          onClick={() => onToggle(item.key)}
+          title={item.label}
+        >
+          <span className="dock-dot" />
+          <span className="dock-label">{item.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -890,12 +953,78 @@ export default function Home() {
   const [algorithm, setAlgorithm] = useState("dbscan");
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
+  const [windows, setWindows] = useState<Record<WindowKey, boolean>>({
+    input: true,
+    runState: true,
+    analysis: true,
+    schema: true,
+  });
+
+  const toggleWindow = (key: WindowKey) => {
+    setWindows((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const analytics: ParsedLogDataset = useMemo(() => parseLogStream(payload), [payload]);
 
   async function submit() {
     setStatus("submitting");
     setResult(null);
+
+    if (algorithm === "auto") {
+      setStatus("auto: submitting all algorithms");
+      const ingestResults = await Promise.all(
+        ALL_ALGORITHMS.map(async (algo) => {
+          const res = await fetch("/api/ingest", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ payload, algorithm: algo }),
+          }).then((r) => r.json());
+          return { algo, jobId: res.jobId as string | undefined, error: res.error as string | undefined };
+        })
+      );
+
+      const validJobs = ingestResults.filter((j): j is typeof j & { jobId: string } => !!j.jobId);
+      if (validJobs.length === 0) {
+        setStatus(ingestResults[0]?.error ?? "auto submit failed");
+        return;
+      }
+
+      setStatus(`auto: waiting for ${validJobs.length} jobs…`);
+
+      const finished = await Promise.all(
+        validJobs.map(({ algo, jobId }) =>
+          new Promise<{ algo: string; result: Result }>((resolve) => {
+            const stream = new EventSource(`/api/jobs/${jobId}/stream`);
+            stream.onmessage = async (event) => {
+              const data = JSON.parse(event.data) as Result;
+              if (data.status === "ready" || data.status === "failed") {
+                stream.close();
+                const resolved = await fetch(`/api/jobs/${jobId}`).then((r) => r.json());
+                resolve({ algo, result: { ...resolved, algorithm: algo } });
+              }
+            };
+            stream.onerror = () => {
+              stream.close();
+              resolve({ algo, result: { jobId, status: "failed", algorithm: algo } as Result });
+            };
+          })
+        )
+      );
+
+      const scored = finished
+        .filter((f) => f.result.status === "ready")
+        .map((f) => ({ ...f, score: scoreResult(f.result) }))
+        .sort((a, b) => b.score - a.score);
+
+      if (scored.length > 0) {
+        setResult(scored[0].result);
+        setStatus(`ready · auto winner: ${scored[0].algo}`);
+      } else {
+        setStatus("auto: all algorithms failed");
+      }
+      return;
+    }
+
     const ingest = await fetch("/api/ingest", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -976,88 +1105,95 @@ export default function Home() {
       </section>
 
       <section className="workspace">
-        <div className="window animate-fade-in-up stagger-1">
-          <Chrome />
-          <div className="window-head">
-            <div>
-              <h2>Input stream</h2>
-              <p>Paste newline-delimited JSON with nested objects, key-values, or plain text.</p>
+        {windows.input && (
+          <div className="window animate-fade-in-up stagger-1">
+            <Chrome onClose={() => toggleWindow("input")} />
+            <div className="window-head">
+              <div>
+                <h2>Input stream</h2>
+                <p>Paste newline-delimited JSON with nested objects, key-values, or plain text.</p>
+              </div>
+            </div>
+            <textarea className="textarea" value={payload} onChange={(e) => setPayload(e.target.value)} />
+            <div className="controls">
+              <select className="select" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
+                <option value="auto">Auto (all algorithms)</option>
+                <option value="dbscan">DBSCAN</option>
+                <option value="kmeans++">K-means++</option>
+                <option value="birch">BIRCH</option>
+                <option value="mean_shift">Mean Shift</option>
+                <option value="optics">OPTICS</option>
+                <option value="gmm">GMM</option>
+                <option value="agglomerative">Agglomerative</option>
+              </select>
+              <button className="button" onClick={submit}>
+                Run analysis
+              </button>
             </div>
           </div>
-          <textarea className="textarea" value={payload} onChange={(e) => setPayload(e.target.value)} />
-          <div className="controls">
-            <select className="select" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
-              <option value="dbscan">DBSCAN</option>
-              <option value="kmeans++">K-means++</option>
-              <option value="birch">BIRCH</option>
-              <option value="mean_shift">Mean Shift</option>
-              <option value="optics">OPTICS</option>
-              <option value="gmm">GMM</option>
-              <option value="agglomerative">Agglomerative</option>
-            </select>
-            <button className="button" onClick={submit}>
-              Run analysis
-            </button>
-          </div>
-        </div>
+        )}
 
-        <div className="window animate-fade-in-up stagger-2">
-          <Chrome />
-          <div className="window-head">
-            <div>
-              <h2>Run state</h2>
-              <p>Engine status and backend summary. Supplemental trends are added below.</p>
+        {windows.runState && (
+          <div className="window animate-fade-in-up stagger-2">
+            <Chrome onClose={() => toggleWindow("runState")} />
+            <div className="window-head">
+              <div>
+                <h2>Run state</h2>
+                <p>Engine status and backend summary. Supplemental trends are added below.</p>
+              </div>
+            </div>
+            <div className="status-row">
+              <span className={`status-pill ${status === "ready" ? "status-ready" : ""}`}>{status}</span>
+              {analytics.invalidRows > 0 ? <span className="status-note">{analytics.invalidRows} invalid row(s)</span> : null}
+            </div>
+            <div className="run-summary">
+              <div className="animate-fade-in-up stagger-1">
+                <span>Rows</span>
+                <strong><FitText minFontSize={14}><AnimatedValue value={result?.rows ?? analytics.rows.length} /></FitText></strong>
+              </div>
+              <div className="animate-fade-in-up stagger-2">
+                <span>Clusters</span>
+                <strong><FitText minFontSize={14}>{result?.clusters ?? "-"}</FitText></strong>
+              </div>
+              <div className="animate-fade-in-up stagger-3">
+                <span>Entropy</span>
+                <strong><FitText minFontSize={14}>{typeof result?.entropy === "number" ? result.entropy.toFixed(3) : "-"}</FitText></strong>
+              </div>
+              <div className="animate-fade-in-up stagger-4">
+                <span>Trend</span>
+                <strong><FitText minFontSize={14}>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</FitText></strong>
+              </div>
             </div>
           </div>
-          <div className="status-row">
-            <span className={`status-pill ${status === "ready" ? "status-ready" : ""}`}>{status}</span>
-            {analytics.invalidRows > 0 ? <span className="status-note">{analytics.invalidRows} invalid row(s)</span> : null}
-          </div>
-          <div className="run-summary">
-            <div className="animate-fade-in-up stagger-1">
-              <span>Rows</span>
-              <strong><FitText minFontSize={14}><AnimatedValue value={result?.rows ?? analytics.rows.length} /></FitText></strong>
-            </div>
-            <div className="animate-fade-in-up stagger-2">
-              <span>Clusters</span>
-              <strong><FitText minFontSize={14}>{result?.clusters ?? "-"}</FitText></strong>
-            </div>
-            <div className="animate-fade-in-up stagger-3">
-              <span>Entropy</span>
-              <strong><FitText minFontSize={14}>{typeof result?.entropy === "number" ? result.entropy.toFixed(3) : "-"}</FitText></strong>
-            </div>
-            <div className="animate-fade-in-up stagger-4">
-              <span>Trend</span>
-              <strong><FitText minFontSize={14}>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</FitText></strong>
-            </div>
-          </div>
-        </div>
+        )}
       </section>
 
-      <section className="result-stage animate-fade-in-up">
-        <div className="window">
-          <Chrome />
-          <div className="window-head">
-            <div>
-              <h2>Analysis output</h2>
-              <p>The backend engine render stays intact. Export the rendered preview as PNG.</p>
+      {windows.analysis && (
+        <section className="result-stage animate-fade-in-up">
+          <div className="window">
+            <Chrome onClose={() => toggleWindow("analysis")} />
+            <div className="window-head">
+              <div>
+                <h2>Analysis output</h2>
+                <p>The backend engine render stays intact. Export the rendered preview as PNG.</p>
+              </div>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                {result?.jobId ? (
+                  <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
+                    Open SSR report
+                  </a>
+                ) : null}
+                {engineSvgMarkup ? (
+                  <button className="ghost-button" onClick={() => downloadSvgAsPng(engineSvgMarkup, "engine-analysis-preview")}>
+                    Download PNG
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              {result?.jobId ? (
-                <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
-                  Open SSR report
-                </a>
-              ) : null}
-              {engineSvgMarkup ? (
-                <button className="ghost-button" onClick={() => downloadSvgAsPng(engineSvgMarkup, "engine-analysis-preview")}>
-                  Download PNG
-                </button>
-              ) : null}
-            </div>
+            <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
           </div>
-          <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Dynamic visualization grid */}
       <section className="viz-grid">
@@ -1108,10 +1244,10 @@ export default function Home() {
         )}
       </section>
 
-      {analytics.fieldSchemas.length > 0 && (
+      {windows.schema && analytics.fieldSchemas.length > 0 && (
         <section className="stats-section animate-fade-in-up">
           <div className="window">
-            <Chrome />
+            <Chrome onClose={() => toggleWindow("schema")} />
             <div className="window-head">
               <div>
                 <h2>Inferred schema</h2>
@@ -1122,6 +1258,8 @@ export default function Home() {
           </div>
         </section>
       )}
+
+      <Dock windows={windows} onToggle={toggleWindow} />
     </main>
   );
 }
