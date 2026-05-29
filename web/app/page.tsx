@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   parseLogStream,
   type HistogramBar,
@@ -444,6 +444,115 @@ async function downloadSvgAsPng(markup: string, name: string) {
   }
 }
 
+/* ─────────── Animation hooks ─────────── */
+
+function useCountUp(target: number, duration = 800) {
+  const [value, setValue] = useState(0);
+  const startRef = useRef<number | null>(null);
+  const fromRef = useRef(0);
+
+  useEffect(() => {
+    fromRef.current = value;
+    startRef.current = null;
+    let raf: number;
+
+    const tick = (now: number) => {
+      if (startRef.current === null) startRef.current = now;
+      const elapsed = now - startRef.current;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+      setValue(fromRef.current + (target - fromRef.current) * eased);
+      if (progress < 1) raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration]);
+
+  return value;
+}
+
+function useInView<T extends HTMLElement>(ref: React.RefObject<T | null>, threshold = 0.1) {
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { threshold }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref, threshold]);
+  return inView;
+}
+
+function AnimatedValue({ value, decimals = 0 }: { value: number; decimals?: number }) {
+  const animated = useCountUp(value, 900);
+  return <>{animated.toFixed(decimals)}</>;
+}
+
+function FitText({
+  children,
+  className,
+  style,
+  minFontSize = 11,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+  minFontSize?: number;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [ready, setReady] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const parent = el.parentElement;
+    if (!parent) return;
+
+    el.style.fontSize = "";
+    el.style.whiteSpace = "nowrap";
+    const computedSize = parseFloat(getComputedStyle(el).fontSize);
+    let size = computedSize;
+
+    if (el.scrollWidth > parent.clientWidth && parent.clientWidth > 0) {
+      while (el.scrollWidth > parent.clientWidth && size > minFontSize) {
+        size -= 0.5;
+        el.style.fontSize = `${size}px`;
+      }
+      if (el.scrollWidth > parent.clientWidth) {
+        // Even at min size it still overflows — allow wrapping and restore original size
+        el.style.whiteSpace = "normal";
+        el.style.fontSize = `${computedSize}px`;
+      }
+    }
+    setReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [children, minFontSize]);
+
+  return (
+    <span
+      ref={ref}
+      className={className}
+      style={{
+        display: "inline-block",
+        visibility: ready ? "visible" : "hidden",
+        ...style,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 /* ─────────── React components ─────────── */
 
 function Chrome() {
@@ -492,15 +601,21 @@ function ChartCard({
 
 function HistogramChart({ bars }: { bars: HistogramBar[] }) {
   const max = Math.max(...bars.map((bar) => bar.value), 1);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 50);
+    return () => clearTimeout(t);
+  }, [bars]);
+
   return (
     <div className="histogram">
-      {bars.map((bar) => (
-        <div className="histogram-bar" key={bar.label}>
+      {bars.map((bar, i) => (
+        <div className="histogram-bar" key={bar.label} style={{ opacity: mounted ? 1 : 0, transition: `opacity 0.4s ease ${i * 40}ms` }}>
           <span>{bar.label}</span>
           <div className="histogram-track">
-            <div className="histogram-fill" style={{ width: `${(bar.value / max) * 100}%` }} />
+            <div className="histogram-fill" style={{ width: mounted ? `${(bar.value / max) * 100}%` : "0%" }} />
           </div>
-          <strong>{bar.value}</strong>
+          <strong><FitText minFontSize={12}>{bar.value}</FitText></strong>
         </div>
       ))}
     </div>
@@ -508,7 +623,7 @@ function HistogramChart({ bars }: { bars: HistogramBar[] }) {
 }
 
 function LineChart({ series }: { series: SeriesChart }) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  const pathRef = useRef<SVGPathElement | null>(null);
   const width = 700;
   const height = 240;
   const left = 16;
@@ -527,12 +642,23 @@ function LineChart({ series }: { series: SeriesChart }) {
 
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
 
+  useEffect(() => {
+    const el = pathRef.current;
+    if (!el) return;
+    const len = el.getTotalLength();
+    el.style.strokeDasharray = `${len}`;
+    el.style.strokeDashoffset = `${len}`;
+    el.getBoundingClientRect();
+    el.style.transition = "stroke-dashoffset 1.2s cubic-bezier(0.16, 1, 0.3, 1)";
+    el.style.strokeDashoffset = "0";
+  }, [path]);
+
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${series.key} line chart`}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${series.key} line chart`}>
       <path className="chart-grid" d={`M ${left} ${top + innerHeight} H ${width - right}`} />
-      <path d={path} fill="none" stroke={series.color} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      {points.map((point) => (
-        <circle key={`${series.key}-${point.label}`} cx={point.x} cy={point.y} r="3.5" fill={series.color} />
+      <path ref={pathRef} d={path} fill="none" stroke={series.color} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+      {points.map((point, i) => (
+        <circle className="chart-point" key={`${series.key}-${point.label}`} cx={point.x} cy={point.y} r="3.5" fill={series.color} style={{ transitionDelay: `${i * 25}ms` }} />
       ))}
     </svg>
   );
@@ -572,7 +698,7 @@ function ScatterChart({ scatter }: { scatter: ScatterSeries }) {
       <line x1={left} y1={top + innerHeight} x2={width - right} y2={top + innerHeight} stroke="#4b3a30" strokeWidth="1.5" />
       <line x1={left} y1={top} x2={left} y2={top + innerHeight} stroke="#4b3a30" strokeWidth="1.5" />
       {points.map((p, i) => (
-        <circle key={i} cx={p.x} cy={p.y} r="3.5" fill={scatter.color} opacity="0.85" />
+        <circle className="scatter-point" key={i} cx={p.x} cy={p.y} r="3.5" fill={scatter.color} opacity="0.85" />
       ))}
     </svg>
   );
@@ -618,7 +744,7 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
           const y = 100 + i * cellSize;
           return (
             <g key={`${ki}-${kj}`}>
-              <rect x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
+              <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
               <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize="11" fontFamily="ui-monospace, monospace">
                 {value.toFixed(2)}
               </text>
@@ -663,7 +789,7 @@ function DonutChart({ bars }: { bars: HistogramBar[] }) {
     <svg viewBox="0 0 340 260" role="img" aria-label="donut chart">
       {slices.map((s, i) => (
         <g key={i}>
-          <path d={s.d} fill={s.color} opacity={0.92} />
+          <path className="donut-slice" d={s.d} fill={s.color} opacity={0.92} />
           <line
             x1={cx + radius * Math.cos(s.midAngle)}
             y1={cy + radius * Math.sin(s.midAngle)}
@@ -694,21 +820,27 @@ function DonutChart({ bars }: { bars: HistogramBar[] }) {
 function BooleanChart({ data }: { data: { key: string; trueCount: number; falseCount: number } }) {
   const total = data.trueCount + data.falseCount;
   const max = Math.max(total, 1);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 50);
+    return () => clearTimeout(t);
+  }, [data]);
+
   return (
     <div className="boolean-chart">
-      <div className="boolean-row">
+      <div className="boolean-row" style={{ opacity: mounted ? 1 : 0, transition: "opacity 0.4s ease" }}>
         <span>true</span>
         <div className="boolean-track">
-          <div className="boolean-fill boolean-true" style={{ width: `${(data.trueCount / max) * 100}%` }} />
+          <div className="boolean-fill boolean-true" style={{ width: mounted ? `${(data.trueCount / max) * 100}%` : "0%" }} />
         </div>
-        <strong>{data.trueCount}</strong>
+        <strong><FitText minFontSize={12}>{data.trueCount}</FitText></strong>
       </div>
-      <div className="boolean-row">
+      <div className="boolean-row" style={{ opacity: mounted ? 1 : 0, transition: "opacity 0.4s ease 0.1s" }}>
         <span>false</span>
         <div className="boolean-track">
-          <div className="boolean-fill boolean-false" style={{ width: `${(data.falseCount / max) * 100}%` }} />
+          <div className="boolean-fill boolean-false" style={{ width: mounted ? `${(data.falseCount / max) * 100}%` : "0%" }} />
         </div>
-        <strong>{data.falseCount}</strong>
+        <strong><FitText minFontSize={12}>{data.falseCount}</FitText></strong>
       </div>
     </div>
   );
@@ -717,11 +849,11 @@ function BooleanChart({ data }: { data: { key: string; trueCount: number; falseC
 function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
   return (
     <div className="stats-grid">
-      {schemas.slice(0, 8).map((s) => {
+      {schemas.slice(0, 8).map((s, idx) => {
         const total = s.nullCount + s.numericCount + s.stringCount + s.boolCount + s.arrayCount + s.objectCount;
         const dominantType = Array.from(s.types.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
         return (
-          <div className="stats-card" key={s.key}>
+          <div className={`stats-card stagger-${Math.min(idx + 1, 8)}`} key={s.key}>
             <div className="stats-header">
               <code>{s.key}</code>
               <span className="stats-badge">{dominantType}</span>
@@ -730,20 +862,18 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
               {s.numericCount > 0 && (
                 <div className="stats-metric">
                   <span>min / max / mean</span>
-                  <strong>
-                    {s.min?.toFixed(2)} / {s.max?.toFixed(2)} / {s.mean?.toFixed(2)}
-                  </strong>
+                  <strong><FitText minFontSize={12}>{s.min?.toFixed(2)} / {s.max?.toFixed(2)} / {s.mean?.toFixed(2)}</FitText></strong>
                 </div>
               )}
               {s.stringCount > 0 && (
                 <div className="stats-metric">
                   <span>unique</span>
-                  <strong>{formatCompactNumber(s.uniqueValues.size)}</strong>
+                  <strong><FitText minFontSize={12}>{formatCompactNumber(s.uniqueValues.size)}</FitText></strong>
                 </div>
               )}
               <div className="stats-metric">
                 <span>null rate</span>
-                <strong>{((s.nullCount / Math.max(total, 1)) * 100).toFixed(1)}%</strong>
+                <strong><FitText minFontSize={12}>{((s.nullCount / Math.max(total, 1)) * 100).toFixed(1)}%</FitText></strong>
               </div>
             </div>
           </div>
@@ -817,7 +947,7 @@ export default function Home() {
 
   return (
     <main className="app-shell">
-      <section className="hero">
+      <section className="hero animate-fade-in-up">
         <div className="eyebrow">Realtime log workbench</div>
         <h1>Shape-aware parser. Dynamic visuals.</h1>
         <p>
@@ -827,26 +957,26 @@ export default function Home() {
       </section>
 
       <section className="metrics">
-        <div className="metric">
+        <div className="metric animate-fade-in-up stagger-1">
           <span>Rows</span>
-          <strong>{analytics.rows.length}</strong>
+          <strong><FitText minFontSize={14}><AnimatedValue value={analytics.rows.length} /></FitText></strong>
         </div>
-        <div className="metric">
+        <div className="metric animate-fade-in-up stagger-2">
           <span>Fields</span>
-          <strong>{analytics.fieldSchemas.length}</strong>
+          <strong><FitText minFontSize={14}><AnimatedValue value={analytics.fieldSchemas.length} /></FitText></strong>
         </div>
-        <div className="metric">
+        <div className="metric animate-fade-in-up stagger-3">
           <span>Numeric</span>
-          <strong>{analytics.series.length}</strong>
+          <strong><FitText minFontSize={14}><AnimatedValue value={analytics.series.length} /></FitText></strong>
         </div>
-        <div className="metric">
+        <div className="metric animate-fade-in-up stagger-4">
           <span>Correlations</span>
-          <strong>{analytics.correlations.length}</strong>
+          <strong><FitText minFontSize={14}><AnimatedValue value={analytics.correlations.length} /></FitText></strong>
         </div>
       </section>
 
       <section className="workspace">
-        <div className="window">
+        <div className="window animate-fade-in-up stagger-1">
           <Chrome />
           <div className="window-head">
             <div>
@@ -871,7 +1001,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="window">
+        <div className="window animate-fade-in-up stagger-2">
           <Chrome />
           <div className="window-head">
             <div>
@@ -880,31 +1010,31 @@ export default function Home() {
             </div>
           </div>
           <div className="status-row">
-            <span className="status-pill">{status}</span>
+            <span className={`status-pill ${status === "ready" ? "status-ready" : ""}`}>{status}</span>
             {analytics.invalidRows > 0 ? <span className="status-note">{analytics.invalidRows} invalid row(s)</span> : null}
           </div>
           <div className="run-summary">
-            <div>
+            <div className="animate-fade-in-up stagger-1">
               <span>Rows</span>
-              <strong>{result?.rows ?? analytics.rows.length}</strong>
+              <strong><FitText minFontSize={14}><AnimatedValue value={result?.rows ?? analytics.rows.length} /></FitText></strong>
             </div>
-            <div>
+            <div className="animate-fade-in-up stagger-2">
               <span>Clusters</span>
-              <strong>{result?.clusters ?? "-"}</strong>
+              <strong><FitText minFontSize={14}>{result?.clusters ?? "-"}</FitText></strong>
             </div>
-            <div>
+            <div className="animate-fade-in-up stagger-3">
               <span>Entropy</span>
-              <strong>{typeof result?.entropy === "number" ? result.entropy.toFixed(3) : "-"}</strong>
+              <strong><FitText minFontSize={14}>{typeof result?.entropy === "number" ? result.entropy.toFixed(3) : "-"}</FitText></strong>
             </div>
-            <div>
+            <div className="animate-fade-in-up stagger-4">
               <span>Trend</span>
-              <strong>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</strong>
+              <strong><FitText minFontSize={14}>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</FitText></strong>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="result-stage">
+      <section className="result-stage animate-fade-in-up">
         <div className="window">
           <Chrome />
           <div className="window-head">
@@ -979,7 +1109,7 @@ export default function Home() {
       </section>
 
       {analytics.fieldSchemas.length > 0 && (
-        <section className="stats-section">
+        <section className="stats-section animate-fade-in-up">
           <div className="window">
             <Chrome />
             <div className="window-head">

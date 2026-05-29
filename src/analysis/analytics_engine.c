@@ -77,7 +77,8 @@ static bool logana_is_numeric_trap(const char *str) {
     return (strcmp(buf, "nan") == 0 ||
             strcmp(buf, "inf") == 0 ||
             strcmp(buf, "infinity") == 0 ||
-            strcmp(buf, "null") == 0);
+            strcmp(buf, "null") == 0 ||
+            strcmp(buf, "undefined") == 0);
 }
 
 /**
@@ -239,47 +240,60 @@ static int logana_normalize_timestamp(const char *str, uint64_t *out_ms) {
 
     size_t len = (size_t)(token_end - str);
 
-    /* Case A: Pure integer -> Unix epoch */
-    bool all_digits = true;
-    for (const char *p = str; p < token_end; ++p) {
-        if (!isdigit((unsigned char)*p)) {
-            all_digits = false;
-            break;
-        }
-    }
-
-    if (all_digits && len > 0) {
-        /* Reject 10-digit-or-shorter seconds (mixed ISO/epoch payloads) */
-        if (len <= 10) return 0;
-        unsigned long long val = strtoull(str, NULL, 10);
-        uint64_t ms;
-        if (val < 10000000000ULL) {
-            ms = val * 1000ULL;               /* seconds -> ms */
-        } else if (val > 2000000000000ULL) {
-            ms = val / 1000ULL;               /* microseconds -> ms */
-        } else {
-            ms = val;                         /* milliseconds */
-        }
-        /* Reject epochs outside 2000-2040 UTC */
-        if (ms >= 946684800000ULL && ms <= 2208988800000ULL) {
-            *out_ms = ms;
-            return 1;
-        }
-        return 0;
-    }
-
-    /* Case B: ISO-8601 string */
+    /* Copy token to bounded buffer for safe parsing */
     char buf[64];
     if (len >= sizeof(buf)) len = sizeof(buf) - 1;
     memcpy(buf, str, len);
     buf[len] = '\0';
 
+    /* Case A: Numeric epoch (integer or floating-point seconds) */
+    bool is_numeric = true;
+    bool has_dot = false;
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] == '.') { has_dot = true; continue; }
+        if (!isdigit((unsigned char)buf[i])) { is_numeric = false; break; }
+    }
+
+    if (is_numeric && len > 0) {
+        if (has_dot) {
+            double sec = strtod(buf, NULL);
+            uint64_t ms = (uint64_t)(sec * 1000.0);
+            if (ms >= 946684800000ULL && ms <= 2208988800000ULL) {
+                *out_ms = ms;
+                return 1;
+            }
+        } else {
+            unsigned long long val = strtoull(buf, NULL, 10);
+            uint64_t ms;
+            if (val < 10000000000ULL) {
+                ms = val * 1000ULL;               /* seconds -> ms */
+            } else if (val > 2000000000000ULL) {
+                ms = val / 1000ULL;               /* microseconds -> ms */
+            } else {
+                ms = val;                         /* milliseconds */
+            }
+            /* Reject epochs outside 2000-2040 UTC */
+            if (ms >= 946684800000ULL && ms <= 2208988800000ULL) {
+                *out_ms = ms;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    /* Case B: ISO-8601 string */
     struct tm tm = {0};
     const char *rest = strptime(buf, "%Y-%m-%dT%H:%M:%S", &tm);
     if (!rest && len >= 10) {
         rest = strptime(buf, "%Y-%m-%d", &tm);   /* date-only fallback */
     }
     if (rest) {
+        /* Skip 'Z' or simple timezone offset (+HH:MM / -HH:MM) */
+        if (*rest == 'Z' || *rest == 'z') {
+            rest++;
+        } else if ((*rest == '+' || *rest == '-') && len >= (size_t)(rest - buf + 6)) {
+            rest += 6;
+        }
         time_t sec = timegm(&tm);
         if (sec == (time_t)-1) return 0;
         uint64_t ms = (uint64_t)sec * 1000ULL;
@@ -297,20 +311,20 @@ static int logana_normalize_timestamp(const char *str, uint64_t *out_ms) {
 }
 
 /* --------------------------------------------------------------------------
- * 3. Distance Matrix with Dimension Masking & Imputation Scaling
+ * 3. Distance Matrix with Dimension Masking, Scaling & Normalization
  * -------------------------------------------------------------------------- */
 
+typedef double (*logana_distance_fn_t)(const float *a, const float *b,
+                                       const uint8_t *mask_a, const uint8_t *mask_b,
+                                       size_t dims, const logana_analysis_summary_t *summary);
+
 /**
- * @brief Scaled Euclidean distance with per-dimension validity masking.
- *        Invalid dimensions are skipped. The resulting sum is scaled by
- *        (total_dims / valid_dims) so that missing values do not artificially
- *        shrink distances and collapse clusters.
- * @param mask_a  Per-dimension validity for vector a (NULL = all valid).
- * @param mask_b  Per-dimension validity for vector b (NULL = all valid).
+ * @brief Scaled Euclidean distance (squared) with per-dimension validity masking.
  */
-static double logana_distance_sq(const float *a, const float *b,
-                                 const uint8_t *mask_a, const uint8_t *mask_b,
-                                 size_t dims) {
+static double logana_distance_euclidean_sq(const float *a, const float *b,
+                                           const uint8_t *mask_a, const uint8_t *mask_b,
+                                           size_t dims, const logana_analysis_summary_t *summary) {
+    (void)summary;
     double total = 0.0;
     size_t valid_count = 0;
     for (size_t i = 0; i < dims; ++i) {
@@ -320,8 +334,54 @@ static double logana_distance_sq(const float *a, const float *b,
         total += d * d;
         ++valid_count;
     }
-    if (valid_count == 0) return HUGE_VAL; /* no common valid dimension -> infinite distance */
-    /* Scale up to compensate for missing dimensions */
+    if (valid_count == 0) return HUGE_VAL;
+    total *= (double)dims / (double)valid_count;
+    return total;
+}
+
+/**
+ * @brief Manhattan distance ($L_1$ norm) with per-dimension validity masking
+ *        and dynamic scaling.  Avoids geometric amplification of negative
+ *        coordinates because it uses absolute differences instead of squares.
+ */
+static double logana_distance_manhattan(const float *a, const float *b,
+                                        const uint8_t *mask_a, const uint8_t *mask_b,
+                                        size_t dims, const logana_analysis_summary_t *summary) {
+    (void)summary;
+    double total = 0.0;
+    size_t valid_count = 0;
+    for (size_t i = 0; i < dims; ++i) {
+        if (mask_a && !mask_a[i]) continue;
+        if (mask_b && !mask_b[i]) continue;
+        total += fabs((double)a[i] - (double)b[i]);
+        ++valid_count;
+    }
+    if (valid_count == 0) return HUGE_VAL;
+    total *= (double)dims / (double)valid_count;
+    return total;
+}
+
+/**
+ * @brief Z-score normalized squared Euclidean distance.  Prevents negative
+ *        coordinates from exploding distance because each dimension is
+ *        standardised before differencing.
+ */
+static double logana_distance_zscore_sq(const float *a, const float *b,
+                                        const uint8_t *mask_a, const uint8_t *mask_b,
+                                        size_t dims, const logana_analysis_summary_t *summary) {
+    double total = 0.0;
+    size_t valid_count = 0;
+    for (size_t i = 0; i < dims; ++i) {
+        if (mask_a && !mask_a[i]) continue;
+        if (mask_b && !mask_b[i]) continue;
+        double sigma = summary && summary->stddev[i] > 0.0001 ? summary->stddev[i] : 1.0;
+        double za = ((double)a[i] - (summary ? summary->mean[i] : 0.0)) / sigma;
+        double zb = ((double)b[i] - (summary ? summary->mean[i] : 0.0)) / sigma;
+        double d = za - zb;
+        total += d * d;
+        ++valid_count;
+    }
+    if (valid_count == 0) return HUGE_VAL;
     total *= (double)dims / (double)valid_count;
     return total;
 }
@@ -371,7 +431,7 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
                 double number = 0.0;
                 if (logana_extract_number(cursor, engine->config.numeric_keys[d],
                                           engine->config.case_sensitive,
-                                          &number, &valid, true)) {
+                                          &number, &valid, false)) {
                     extracted[captured] = number;
                     extracted_valid[captured] = valid;
                     if (!valid) valid_mask[rows * dims + captured] = 0;
@@ -575,15 +635,19 @@ static void logana_compute_summary(logana_job_t *job) {
     job->summary.outlier_ratio = rows ? ((double)outliers / (double)rows) : 0.0;
 }
 
-static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count, size_t dims, float *candidate) {
+static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count, size_t dims,
+                                          float *candidate, logana_distance_fn_t dist_fn,
+                                          const logana_analysis_summary_t *summary) {
     for (size_t i = 0; i < mode_count; ++i) {
-        if (logana_distance_sq(modes + i * dims, candidate, NULL, NULL, dims) < 0.04) return i;
+        if (dist_fn(modes + i * dims, candidate, NULL, NULL, dims, summary) < 0.04) return i;
     }
     memcpy((float *)(modes + mode_count * dims), candidate, dims * sizeof(float));
     return mode_count;
 }
 
-static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
+static size_t logana_run_kmeans(logana_job_t *job, size_t k,
+                                logana_distance_fn_t dist_fn,
+                                const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     if (!rows) return 0;
@@ -596,8 +660,8 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
         for (size_t r = 0; r < rows; ++r) {
             double nearest = 1e18;
             for (size_t j = 0; j < c; ++j) {
-                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + j * dims,
-                                                  job->matrix.valid_mask + r * dims, NULL, dims);
+                double dist = dist_fn(job->matrix.values + r * dims, centers + j * dims,
+                                      job->matrix.valid_mask + r * dims, NULL, dims, summary);
                 if (dist < nearest) nearest = dist;
             }
             if (nearest > best_dist) {
@@ -614,8 +678,8 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
             double best_dist = 1e18;
             int best = 0;
             for (size_t c = 0; c < k; ++c) {
-                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + c * dims,
-                                                  job->matrix.valid_mask + r * dims, NULL, dims);
+                double dist = dist_fn(job->matrix.values + r * dims, centers + c * dims,
+                                      job->matrix.valid_mask + r * dims, NULL, dims, summary);
                 if (dist < best_dist) {
                     best_dist = dist;
                     best = (int)c;
@@ -647,10 +711,11 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
     return k;
 }
 
-static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_samples) {
+static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_samples,
+                                logana_distance_fn_t dist_fn,
+                                const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
-    double eps_sq = eps * eps;
     int *labels = job->matrix.labels;
     for (size_t i = 0; i < rows; ++i) labels[i] = -2;
     size_t cluster_id = 0;
@@ -658,8 +723,8 @@ static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_sample
         if (labels[i] != -2) continue;
         size_t count = 0;
         for (size_t j = 0; j < rows; ++j) {
-            if (logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
-                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims) <= eps_sq)
+            if (dist_fn(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                        job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims, summary) <= eps)
                 count++;
         }
         if (count < min_samples) {
@@ -669,8 +734,8 @@ static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_sample
         labels[i] = (int)cluster_id;
         for (size_t j = 0; j < rows; ++j) {
             if (labels[j] == -2 &&
-                logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
-                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims) <= eps_sq) {
+                dist_fn(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                        job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims, summary) <= eps) {
                 labels[j] = (int)cluster_id;
             }
         }
@@ -679,7 +744,9 @@ static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_sample
     return cluster_id;
 }
 
-static size_t logana_run_birch(logana_job_t *job, double threshold) {
+static size_t logana_run_birch(logana_job_t *job, double threshold,
+                               logana_distance_fn_t dist_fn,
+                               const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     float centroids[LOGANA_MAX_DIMENSIONS * 8] = {0};
@@ -689,14 +756,14 @@ static size_t logana_run_birch(logana_job_t *job, double threshold) {
         size_t best = 0;
         double best_dist = 1e18;
         for (size_t c = 0; c < cluster_count; ++c) {
-            double dist = logana_distance_sq(job->matrix.values + r * dims, centroids + c * dims,
-                                              job->matrix.valid_mask + r * dims, NULL, dims);
+            double dist = dist_fn(job->matrix.values + r * dims, centroids + c * dims,
+                                  job->matrix.valid_mask + r * dims, NULL, dims, summary);
             if (dist < best_dist) {
                 best_dist = dist;
                 best = c;
             }
         }
-        if (cluster_count == 0 || best_dist > threshold * threshold) {
+        if (cluster_count == 0 || best_dist > threshold) {
             best = cluster_count < 8 ? cluster_count++ : 7;
             memcpy(centroids + best * dims, job->matrix.values + r * dims, dims * sizeof(float));
         }
@@ -712,7 +779,9 @@ static size_t logana_run_birch(logana_job_t *job, double threshold) {
     return cluster_count;
 }
 
-static size_t logana_run_mean_shift(logana_job_t *job, double bandwidth) {
+static size_t logana_run_mean_shift(logana_job_t *job, double bandwidth,
+                                    logana_distance_fn_t dist_fn,
+                                    const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     float modes[LOGANA_MAX_DIMENSIONS * 16] = {0};
@@ -724,8 +793,8 @@ static size_t logana_run_mean_shift(logana_job_t *job, double bandwidth) {
             double accum[LOGANA_MAX_DIMENSIONS] = {0};
             size_t count = 0;
             for (size_t j = 0; j < rows; ++j) {
-                if (logana_distance_sq(point, job->matrix.values + j * dims,
-                                       NULL, job->matrix.valid_mask + j * dims, dims) <= bandwidth * bandwidth) {
+                if (dist_fn(point, job->matrix.values + j * dims,
+                            NULL, job->matrix.valid_mask + j * dims, dims, summary) <= bandwidth) {
                     for (size_t d = 0; d < dims; ++d) {
                         if (job->matrix.valid_mask && !job->matrix.valid_mask[j * dims + d]) continue;
                         accum[d] += job->matrix.values[j * dims + d];
@@ -736,14 +805,16 @@ static size_t logana_run_mean_shift(logana_job_t *job, double bandwidth) {
             if (!count) break;
             for (size_t d = 0; d < dims; ++d) point[d] = (float)(accum[d] / (double)count);
         }
-        size_t label = logana_assign_cluster_modes(modes, mode_count, dims, point);
+        size_t label = logana_assign_cluster_modes(modes, mode_count, dims, point, dist_fn, summary);
         if (label == mode_count && mode_count < 16) mode_count++;
         job->matrix.labels[r] = (int)label;
     }
     return mode_count;
 }
 
-static size_t logana_run_optics(logana_job_t *job, double eps, size_t min_samples) {
+static size_t logana_run_optics(logana_job_t *job, double eps, size_t min_samples,
+                                logana_distance_fn_t dist_fn,
+                                const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     logana_neighbor_t neighbors[LOGANA_MAX_ROWS < 4096 ? LOGANA_MAX_ROWS : 4096];
@@ -751,8 +822,8 @@ static size_t logana_run_optics(logana_job_t *job, double eps, size_t min_sample
     for (size_t i = 0; i < rows; ++i) {
         size_t count = 0;
         for (size_t j = 0; j < rows; ++j) {
-            double dist = sqrt(logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
-                                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims));
+            double dist = dist_fn(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                  job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims, summary);
             if (dist <= eps) count++;
         }
         neighbors[i].idx = i;
@@ -776,7 +847,8 @@ static size_t logana_run_optics(logana_job_t *job, double eps, size_t min_sample
     return cluster + 1;
 }
 
-static size_t logana_run_gmm(logana_job_t *job, size_t k) {
+static size_t logana_run_gmm(logana_job_t *job, size_t k,
+                             const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     if (k > 3) k = 3;
@@ -798,11 +870,12 @@ static size_t logana_run_gmm(logana_job_t *job, size_t k) {
                 size_t valid_d = 0;
                 for (size_t d = 0; d < dims; ++d) {
                     if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
-                    double delta = job->matrix.values[r * dims + d] - means[c * dims + d];
+                    double sigma = summary && summary->stddev[d] > 0.0001 ? summary->stddev[d] : 1.0;
+                    double delta = ((double)job->matrix.values[r * dims + d] - means[c * dims + d]) / sigma;
                     dist += (delta * delta) / variances[c * dims + d];
                     ++valid_d;
                 }
-                if (valid_d > 0) dist *= (double)dims / (double)valid_d; /* scale like Euclidean */
+                if (valid_d > 0) dist *= (double)dims / (double)valid_d;
                 probs[c] = weights[c] * exp(-0.5 * dist);
                 norm += probs[c];
             }
@@ -832,7 +905,9 @@ static size_t logana_run_gmm(logana_job_t *job, size_t k) {
     return k;
 }
 
-static size_t logana_run_agglomerative(logana_job_t *job, size_t target_clusters) {
+static size_t logana_run_agglomerative(logana_job_t *job, size_t target_clusters,
+                                       logana_distance_fn_t dist_fn,
+                                       const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
     int active[1024];
@@ -846,8 +921,8 @@ static size_t logana_run_agglomerative(logana_job_t *job, size_t target_clusters
             if (active[i] < 0) continue;
             for (size_t j = i + 1; j < rows; ++j) {
                 if (active[j] < 0) continue;
-                double dist = logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
-                                                  job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims);
+                double dist = dist_fn(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                      job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims, summary);
                 if (dist < best) {
                     best = dist;
                     best_i = i;
@@ -870,19 +945,28 @@ static size_t logana_run_agglomerative(logana_job_t *job, size_t target_clusters
     return (size_t)next_label;
 }
 
-static size_t logana_cluster(logana_engine_t *engine, logana_job_t *job) {
+static size_t logana_cluster(logana_engine_t *engine, logana_job_t *job,
+                             const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     if (!rows) return 0;
     job->matrix.labels = calloc(rows, sizeof(int));
     if (!job->matrix.labels) return 0;
+
+    logana_distance_fn_t dist_fn = logana_distance_euclidean_sq;
+    switch (engine->config.distance_metric) {
+        case LOGANA_DIST_MANHATTAN: dist_fn = logana_distance_manhattan; break;
+        case LOGANA_DIST_ZSCORE:    dist_fn = logana_distance_zscore_sq; break;
+        default:                    dist_fn = logana_distance_euclidean_sq; break;
+    }
+
     switch (job->algorithm) {
-        case LOGANA_ALGO_KMEANS_PP: return logana_run_kmeans(job, 3);
-        case LOGANA_ALGO_DBSCAN: return logana_run_dbscan(job, engine->config.dbscan_eps, engine->config.dbscan_min_samples);
-        case LOGANA_ALGO_BIRCH: return logana_run_birch(job, engine->config.dbscan_eps);
-        case LOGANA_ALGO_MEAN_SHIFT: return logana_run_mean_shift(job, engine->config.dbscan_eps * 2.0);
-        case LOGANA_ALGO_OPTICS: return logana_run_optics(job, engine->config.dbscan_eps * 1.2, engine->config.dbscan_min_samples);
-        case LOGANA_ALGO_GMM: return logana_run_gmm(job, 3);
-        case LOGANA_ALGO_AGGLOMERATIVE: return logana_run_agglomerative(job, 3);
+        case LOGANA_ALGO_KMEANS_PP: return logana_run_kmeans(job, 3, dist_fn, summary);
+        case LOGANA_ALGO_DBSCAN: return logana_run_dbscan(job, engine->config.dbscan_eps, engine->config.dbscan_min_samples, dist_fn, summary);
+        case LOGANA_ALGO_BIRCH: return logana_run_birch(job, engine->config.dbscan_eps, dist_fn, summary);
+        case LOGANA_ALGO_MEAN_SHIFT: return logana_run_mean_shift(job, engine->config.dbscan_eps * 2.0, dist_fn, summary);
+        case LOGANA_ALGO_OPTICS: return logana_run_optics(job, engine->config.dbscan_eps * 1.2, engine->config.dbscan_min_samples, dist_fn, summary);
+        case LOGANA_ALGO_GMM: return logana_run_gmm(job, 3, summary);
+        case LOGANA_ALGO_AGGLOMERATIVE: return logana_run_agglomerative(job, 3, dist_fn, summary);
     }
     return 0;
 }
@@ -895,7 +979,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
         return -1;
     }
     logana_compute_summary(job);
-    job->summary.cluster_count = logana_cluster(engine, job);
+    job->summary.cluster_count = logana_cluster(engine, job, &job->summary);
     return 0;
 }
 

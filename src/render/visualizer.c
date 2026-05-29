@@ -15,6 +15,17 @@
 #define LOGANA_REPORT_FRAGMENT_TEMPLATE "./templates/job_report_fragment.html.tmpl"
 #define LOGANA_REPORT_PAGE_TEMPLATE "./templates/job_report_page.html.tmpl"
 
+/**
+ * @brief Symmetric log (symlog) transform guard.
+ *        Prevents mathematical domain errors when logarithmic scaling is
+ *        applied to axes that may contain zero or negative values.
+ */
+static double logana_symlog(double x, double linthresh) {
+    if (x >= linthresh) return log10(x);
+    if (x <= -linthresh) return -log10(-x);
+    return x / linthresh;
+}
+
 typedef struct {
     uint64_t job_id;
     logana_job_status_t status;
@@ -298,6 +309,21 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
         strncat(svg, point, cap - strlen(svg) - 1);
     }
     strncat(svg, "</g>", cap - strlen(svg) - 1);
+
+    // Zero baseline layer (dynamic)
+    if (min_y < 0.0 && max_y > 0.0) {
+        double zero_ny = (0.0 - min_y) / span_y;
+        double zero_y = plot_bottom - zero_ny * plot_h;
+        char baseline[512];
+        snprintf(baseline, sizeof(baseline),
+                 "<g>"
+                 "<line x1='%d' y1='%.2f' x2='%d' y2='%.2f' stroke='#ff6b6b' stroke-width='1.5' stroke-dasharray='6,4' opacity='0.9'/>"
+                 "<text x='%d' y='%.2f' fill='#ff6b6b' font-size='12' font-family='IBM Plex Sans, sans-serif' text-anchor='end' dominant-baseline='middle'>0</text>"
+                 "</g>",
+                 plot_left, zero_y, plot_right, zero_y,
+                 plot_left - 6, zero_y);
+        strncat(svg, baseline, cap - strlen(svg) - 1);
+    }
 
     // Legend for clusters
     if (job->matrix.labels && job->summary.cluster_count > 0) {

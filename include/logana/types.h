@@ -35,6 +35,12 @@ typedef enum {
     LOGANA_ALGO_AGGLOMERATIVE
 } logana_algorithm_t;
 
+typedef enum {
+    LOGANA_DIST_EUCLIDEAN = 0,
+    LOGANA_DIST_MANHATTAN,
+    LOGANA_DIST_ZSCORE
+} logana_distance_metric_t;
+
 typedef struct {
     bool case_sensitive;
     double fuzzy_threshold;
@@ -65,6 +71,7 @@ typedef struct {
     int canvas_height;
     char color_palette[8][16];
     size_t color_count;
+    logana_distance_metric_t distance_metric;
 } logana_config_t;
 
 typedef struct {
