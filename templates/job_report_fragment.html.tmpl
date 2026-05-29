@@ -31,12 +31,16 @@
         <p>Heuristics inferred from the analyzed payload.</p>
       </div>
       <div class="report-insights">
-        {% for item in insights %}
-          <section class="report-insight report-insight-{{ item.tone }}">
-            <h3>{{ item.title }}</h3>
-            <p>{{ item.detail }}</p>
-          </section>
-        {% endfor %}
+        <table class="report-insights-table">
+          <tbody>
+            {% for item in insights %}
+              <tr class="report-insight report-insight-{{ item.tone }}">
+                <th>{{ item.title }}</th>
+                <td>{{ item.detail }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
     </article>
   </section>
