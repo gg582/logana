@@ -984,7 +984,7 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
 
 export default function Home() {
   const [payload, setPayload] = useState(SAMPLE);
-  const [algorithm, setAlgorithm] = useState("dbscan");
+  const [algorithm, setAlgorithm] = useState("auto");
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
   const [windows, setWindows] = useState<Record<WindowKey, boolean>>({

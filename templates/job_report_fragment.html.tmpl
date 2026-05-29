@@ -24,20 +24,6 @@
       <div class="report-canvas">{{ svg }}</div>
     </article>
 
-    <article class="report-panel">
-      <div class="report-panel-head">
-        <h2>Detected rules</h2>
-        <p>Heuristics inferred from the analyzed payload.</p>
-      </div>
-      <div class="report-insights">
-        {% for item in insights %}
-          <article class="report-insight-card report-insight-{{ item.tone }}">
-            <h4>{{ item.title }}</h4>
-            <p>{{ item.detail }}</p>
-          </article>
-        {% endfor %}
-      </div>
-    </article>
   </section>
 
   {% if error %}
