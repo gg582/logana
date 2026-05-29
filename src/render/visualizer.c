@@ -267,6 +267,10 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
 
     strncat(svg, "<g filter='url(#glow)'>", cap - strlen(svg) - 1);
     for (size_t i = 0; i < rows; ++i) {
+        if (job->matrix.valid_mask) {
+            if (!job->matrix.valid_mask[i * dims + d0]) continue;
+            if (!job->matrix.valid_mask[i * dims + d1]) continue;
+        }
         double raw_x = job->matrix.values[i * dims + d0];
         double raw_y = job->matrix.values[i * dims + d1];
         double nx = (raw_x - min_x) / span_x;

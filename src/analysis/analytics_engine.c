@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <ttak/async/task.h>
 #include <ttak/mem/mem.h>
@@ -46,6 +47,81 @@ static void logana_set_job_status(logana_job_t *job, logana_job_status_t status,
     pthread_mutex_unlock(&job->lock);
 }
 
+/* --------------------------------------------------------------------------
+ * 1. Numerical Parsing Guard (Anti-NaN & Overflow Protection)
+ * -------------------------------------------------------------------------- */
+
+/**
+ * @brief Detects injected trap strings before numeric conversion.
+ *        Matches "NaN", "Inf", "Infinity", "null" case-insensitively,
+ *        optionally prefixed by '+' or '-'.
+ */
+static bool logana_is_numeric_trap(const char *str) {
+    while (*str && (isspace((unsigned char)*str) || *str == '"' || *str == '\'')) ++str;
+
+    char buf[16];
+    size_t i = 0;
+    while (str[i] && i < sizeof(buf) - 1 &&
+           (isalpha((unsigned char)str[i]) || str[i] == '+' || str[i] == '-')) {
+        buf[i] = (char)tolower((unsigned char)str[i]);
+        ++i;
+    }
+    buf[i] = '\0';
+
+    if (i == 0) return false;
+    /* Reject prefixes like nan123, nullified, etc. */
+    if (str[i] && !isspace((unsigned char)str[i]) && str[i] != '"' && str[i] != '\'' &&
+        str[i] != ',' && str[i] != ';' && str[i] != '|' && str[i] != '}' && str[i] != ']')
+        return false;
+
+    return (strcmp(buf, "nan") == 0 ||
+            strcmp(buf, "inf") == 0 ||
+            strcmp(buf, "infinity") == 0 ||
+            strcmp(buf, "null") == 0);
+}
+
+/**
+ * @brief Defensive wrapper around strtod().
+ * @param str          Input string.
+ * @param out          Parsed double output.
+ * @param out_valid    If non-NULL, set to true only when value is finite and not a trap.
+ * @param clamp_negative If true, negative values are clamped to 0.0 (infra metrics guard).
+ * @return 1 if a token was consumed, 0 otherwise.
+ */
+static int logana_safe_strtod(const char *str, double *out, bool *out_valid, bool clamp_negative) {
+    if (!str || !*str) return 0;
+
+    if (logana_is_numeric_trap(str)) {
+        if (out_valid) *out_valid = false;
+        *out = 0.0;
+        return 1; /* token consumed but marked invalid */
+    }
+
+    char *end = NULL;
+    double value = strtod(str, &end);
+    if (end == str) return 0;
+
+    /* Strict tail check: reject partial consumptions like "200 OK" or "0x7FFF" */
+    for (const char *p = end; *p; ++p) {
+        if (!isspace((unsigned char)*p) && *p != '"' && *p != '\'' && *p != ',' &&
+            *p != ';' && *p != '|' && *p != '}' && *p != ']' && *p != '%') {
+            return 0;
+        }
+    }
+
+    if (!isfinite(value)) {
+        if (out_valid) *out_valid = false;
+        *out = 0.0;
+        return 1;
+    }
+
+    if (clamp_negative && value < 0.0) value = 0.0;
+
+    if (out_valid) *out_valid = true;
+    *out = value;
+    return 1;
+}
+
 static const char *logana_find_key_ci(const char *line, const char *key) {
     size_t key_len = strlen(key);
     for (const char *p = line; *p; ++p) {
@@ -61,16 +137,23 @@ static const char *logana_find_key_ci(const char *line, const char *key) {
     return NULL;
 }
 
-static int logana_extract_number(const char *line, const char *key, bool case_sensitive, double *out) {
+/**
+ * @brief Extracts a numeric value associated with a JSON key.
+ * @param out_valid    Set to false if key found but value is a trap/NaN/Inf.
+ * @param clamp_negative Clamps negative results to 0.0.
+ */
+static int logana_extract_number(const char *line, const char *key, bool case_sensitive,
+                                 double *out, bool *out_valid, bool clamp_negative) {
     const char *found = case_sensitive ? strstr(line, key) : logana_find_key_ci(line, key);
     if (!found) return 0;
     const char *colon = strchr(found, ':');
     if (!colon) return 0;
-    char *end = NULL;
-    double value = strtod(colon + 1, &end);
-    if (end == colon + 1) return 0;
-    *out = value;
-    return 1;
+
+    const char *start = colon + 1;
+    while (*start && isspace((unsigned char)*start)) ++start;
+    if (!*start) return 0;
+
+    return logana_safe_strtod(start, out, out_valid, clamp_negative);
 }
 
 static size_t logana_count_chars(const char *line, char needle) {
@@ -81,7 +164,10 @@ static size_t logana_count_chars(const char *line, char needle) {
     return count;
 }
 
-static int logana_parse_numeric_token(const char *start, const char *end, double *out) {
+/**
+ * @brief Parses a raw token bounded by [start, end) with trap & overflow guards.
+ */
+static int logana_parse_numeric_token(const char *start, const char *end, double *out, bool *out_valid) {
     while (start < end && isspace((unsigned char)*start)) ++start;
     while (end > start && isspace((unsigned char)end[-1])) --end;
     while (start < end && (*start == '"' || *start == '\'' || *start == '{' || *start == '[' || *start == '(')) ++start;
@@ -94,20 +180,14 @@ static int logana_parse_numeric_token(const char *start, const char *end, double
     memcpy(token, start, len);
     token[len] = '\0';
 
+    /* Reject hexadecimal memory addresses — they are metrics noise, not numbers */
     if (!strncmp(token, "0x", 2) || !strncmp(token, "0X", 2)) {
-        char *hex_end = NULL;
-        unsigned long long value = strtoull(token, &hex_end, 16);
-        if (hex_end && *hex_end == '\0' && hex_end != token) {
-            *out = (double)value;
-            return 1;
-        }
+        if (out_valid) *out_valid = false;
+        *out = 0.0;
+        return 1; /* token consumed but marked invalid */
     }
 
-    char *num_end = NULL;
-    double value = strtod(token, &num_end);
-    if (!num_end || num_end == token || *num_end != '\0') return 0;
-    *out = value;
-    return 1;
+    return logana_safe_strtod(token, out, out_valid, false);
 }
 
 static size_t logana_collect_freeform_numbers(const char *line, double *values, size_t cap) {
@@ -127,19 +207,122 @@ static size_t logana_collect_freeform_numbers(const char *line, double *values, 
             }
         }
         double value = 0.0;
-        if (logana_parse_numeric_token(value_start, end, &value)) {
+        if (logana_parse_numeric_token(value_start, end, &value, NULL)) {
             values[count++] = value;
         }
     }
     return count;
 }
 
-static double logana_distance_sq(const float *a, const float *b, size_t dims) {
+/* --------------------------------------------------------------------------
+ * 2. Timestamp Normalization (ISO-8601 vs Unix Epoch)
+ * -------------------------------------------------------------------------- */
+
+/**
+ * @brief Auto-detects timestamp format and normalizes to milliseconds since epoch.
+ *        Supports Unix epoch integers (sec/ms/us) and ISO-8601 strings.
+ * @param str  Raw JSON value (may contain surrounding quotes).
+ * @param out_ms  Output normalized timestamp in milliseconds.
+ * @return 1 on success, 0 on failure.
+ */
+static int logana_normalize_timestamp(const char *str, uint64_t *out_ms) {
+    if (!str || !*str) return 0;
+
+    /* Strip leading whitespace/quotes/braces */
+    while (*str && (isspace((unsigned char)*str) || *str == '"' || *str == '\'' || *str == ':')) ++str;
+    if (!*str) return 0;
+
+    /* Find strict token boundary so we don't swallow trailing JSON fields */
+    const char *token_end = str;
+    while (*token_end && !isspace((unsigned char)*token_end) && *token_end != ',' && *token_end != '}' && *token_end != ']' && *token_end != '"') ++token_end;
+    if (token_end <= str) return 0;
+
+    size_t len = (size_t)(token_end - str);
+
+    /* Case A: Pure integer -> Unix epoch */
+    bool all_digits = true;
+    for (const char *p = str; p < token_end; ++p) {
+        if (!isdigit((unsigned char)*p)) {
+            all_digits = false;
+            break;
+        }
+    }
+
+    if (all_digits && len > 0) {
+        /* Reject 10-digit-or-shorter seconds (mixed ISO/epoch payloads) */
+        if (len <= 10) return 0;
+        unsigned long long val = strtoull(str, NULL, 10);
+        uint64_t ms;
+        if (val < 10000000000ULL) {
+            ms = val * 1000ULL;               /* seconds -> ms */
+        } else if (val > 2000000000000ULL) {
+            ms = val / 1000ULL;               /* microseconds -> ms */
+        } else {
+            ms = val;                         /* milliseconds */
+        }
+        /* Reject epochs outside 2000-2040 UTC */
+        if (ms >= 946684800000ULL && ms <= 2208988800000ULL) {
+            *out_ms = ms;
+            return 1;
+        }
+        return 0;
+    }
+
+    /* Case B: ISO-8601 string */
+    char buf[64];
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    memcpy(buf, str, len);
+    buf[len] = '\0';
+
+    struct tm tm = {0};
+    const char *rest = strptime(buf, "%Y-%m-%dT%H:%M:%S", &tm);
+    if (!rest && len >= 10) {
+        rest = strptime(buf, "%Y-%m-%d", &tm);   /* date-only fallback */
+    }
+    if (rest) {
+        time_t sec = timegm(&tm);
+        if (sec == (time_t)-1) return 0;
+        uint64_t ms = (uint64_t)sec * 1000ULL;
+        if (*rest == '.') {
+            char *frac_end = NULL;
+            double frac = strtod(rest, &frac_end);
+            (void)frac_end;
+            ms += (uint64_t)(frac * 1000.0);
+        }
+        *out_ms = ms;
+        return 1;
+    }
+
+    return 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 3. Distance Matrix with Dimension Masking & Imputation Scaling
+ * -------------------------------------------------------------------------- */
+
+/**
+ * @brief Scaled Euclidean distance with per-dimension validity masking.
+ *        Invalid dimensions are skipped. The resulting sum is scaled by
+ *        (total_dims / valid_dims) so that missing values do not artificially
+ *        shrink distances and collapse clusters.
+ * @param mask_a  Per-dimension validity for vector a (NULL = all valid).
+ * @param mask_b  Per-dimension validity for vector b (NULL = all valid).
+ */
+static double logana_distance_sq(const float *a, const float *b,
+                                 const uint8_t *mask_a, const uint8_t *mask_b,
+                                 size_t dims) {
     double total = 0.0;
+    size_t valid_count = 0;
     for (size_t i = 0; i < dims; ++i) {
+        if (mask_a && !mask_a[i]) continue;
+        if (mask_b && !mask_b[i]) continue;
         double d = (double)a[i] - (double)b[i];
         total += d * d;
+        ++valid_count;
     }
+    if (valid_count == 0) return HUGE_VAL; /* no common valid dimension -> infinite distance */
+    /* Scale up to compensate for missing dimensions */
+    total *= (double)dims / (double)valid_count;
     return total;
 }
 
@@ -147,9 +330,16 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     size_t dims = engine->config.numeric_key_count;
     if (dims == 0) dims = LOGANA_MAX_DIMENSIONS;
     if (dims > LOGANA_MAX_DIMENSIONS) dims = LOGANA_MAX_DIMENSIONS;
+
     size_t row_capacity = 1024;
     float *values = malloc(row_capacity * dims * sizeof(float));
-    if (!values) return 0;
+    uint64_t *timestamps = malloc(row_capacity * sizeof(uint64_t));
+    uint8_t *valid_mask = malloc(row_capacity * dims * sizeof(uint8_t));
+    if (!values || !timestamps || !valid_mask) {
+        free(values); free(timestamps); free(valid_mask);
+        return 0;
+    }
+
     size_t rows = 0;
     char *cursor = job->payload;
     while (cursor && *cursor && rows < engine->config.max_rows_per_analysis) {
@@ -157,43 +347,114 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
         if (next) *next = '\0';
         if (*cursor) {
             if (rows == row_capacity) {
-                row_capacity *= 2;
-                float *grown = realloc(values, row_capacity * dims * sizeof(float));
-                if (!grown) break;
-                values = grown;
+                size_t new_cap = row_capacity * 2;
+                float *grown_v = realloc(values, new_cap * dims * sizeof(float));
+                uint64_t *grown_t = realloc(timestamps, new_cap * sizeof(uint64_t));
+                uint8_t *grown_m = realloc(valid_mask, new_cap * dims * sizeof(uint8_t));
+                if (!grown_v || !grown_t || !grown_m) break;
+                values = grown_v;
+                timestamps = grown_t;
+                valid_mask = grown_m;
+                row_capacity = new_cap;
             }
+
+            /* Initialize current row validity to all-valid */
+            memset(valid_mask + rows * dims, 1, dims * sizeof(uint8_t));
+
             double extracted[LOGANA_MAX_DIMENSIONS] = {0};
+            bool extracted_valid[LOGANA_MAX_DIMENSIONS] = {false};
             size_t captured = 0;
+
+            /* 1) Extract configured numeric keys with anti-trap guards */
             for (size_t d = 0; d < engine->config.numeric_key_count && captured < dims; ++d) {
+                bool valid = true;
                 double number = 0.0;
-                if (logana_extract_number(cursor, engine->config.numeric_keys[d], engine->config.case_sensitive, &number)) {
-                    extracted[captured++] = number;
+                if (logana_extract_number(cursor, engine->config.numeric_keys[d],
+                                          engine->config.case_sensitive,
+                                          &number, &valid, true)) {
+                    extracted[captured] = number;
+                    extracted_valid[captured] = valid;
+                    if (!valid) valid_mask[rows * dims + captured] = 0;
+                    ++captured;
                 }
             }
+
+            /* 2) Timestamp extraction & normalization */
+            uint64_t ts_ms = 0;
+            bool ts_found = false;
+            for (size_t t = 0; t < engine->config.timestamp_key_count; ++t) {
+                const char *found = engine->config.case_sensitive
+                    ? strstr(cursor, engine->config.timestamp_keys[t])
+                    : logana_find_key_ci(cursor, engine->config.timestamp_keys[t]);
+                if (found) {
+                    const char *colon = strchr(found, ':');
+                    if (colon && logana_normalize_timestamp(colon + 1, &ts_ms)) {
+                        ts_found = true;
+                        break;
+                    }
+                }
+            }
+            if (!ts_found) {
+                /* Fallback: preserve temporal ordering using synthetic ms */
+                ts_ms = (uint64_t)rows * 1000ULL;
+            }
+            timestamps[rows] = ts_ms;
+
+            /* Mask timestamp values so freeform collector doesn't ingest them as metrics */
+            for (size_t t = 0; t < engine->config.timestamp_key_count; ++t) {
+                const char *found = engine->config.case_sensitive
+                    ? strstr(cursor, engine->config.timestamp_keys[t])
+                    : logana_find_key_ci(cursor, engine->config.timestamp_keys[t]);
+                if (found) {
+                    const char *colon = strchr(found, ':');
+                    if (colon) {
+                        char *p = (char *)(colon + 1);
+                        while (*p && *p != ',' && *p != '}') { *p = ' '; ++p; }
+                        break;
+                    }
+                }
+            }
+
+            /* 3) Free-form number fallback */
             if (captured < dims) {
                 double freeform[LOGANA_MAX_DIMENSIONS] = {0};
                 size_t freeform_count = logana_collect_freeform_numbers(cursor, freeform, dims - captured);
                 for (size_t i = 0; i < freeform_count && captured < dims; ++i) {
-                    extracted[captured++] = freeform[i];
+                    extracted[captured] = freeform[i];
+                    extracted_valid[captured] = true; /* freeform parser already rejects traps */
+                    ++captured;
                 }
             }
+
+            /* 4) Synthetic fallback so the row is never completely empty */
             if (captured == 0) {
-                extracted[captured++] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
-                if (captured < dims) extracted[captured++] = (double)strlen(cursor);
-                if (captured < dims) extracted[captured++] = (double)(logana_count_chars(cursor, '=') + logana_count_chars(cursor, ':'));
+                extracted[captured] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
+                extracted_valid[captured] = true;
+                if (captured < dims) { extracted[++captured] = (double)strlen(cursor); extracted_valid[captured] = true; }
+                if (captured < dims) { extracted[++captured] = (double)(logana_count_chars(cursor, '=') + logana_count_chars(cursor, ':')); extracted_valid[captured] = true; }
             }
+
             while (captured < dims) {
                 extracted[captured] = extracted[captured - 1];
+                extracted_valid[captured] = extracted_valid[captured - 1];
                 ++captured;
             }
-            for (size_t d = 0; d < dims; ++d) values[rows * dims + d] = (float)extracted[d];
+
+            for (size_t d = 0; d < dims; ++d) {
+                values[rows * dims + d] = (float)extracted[d];
+                if (!extracted_valid[d]) valid_mask[rows * dims + d] = 0;
+            }
+
             ++rows;
         }
         if (!next) break;
         *next = '\n';
         cursor = next + 1;
     }
+
     job->matrix.values = values;
+    job->matrix.timestamps = timestamps;
+    job->matrix.valid_mask = valid_mask;
     job->matrix.row_count = rows;
     job->matrix.dimensions = dims;
     return rows;
@@ -205,61 +466,118 @@ static void logana_compute_summary(logana_job_t *job) {
     job->summary.row_count = rows;
     job->summary.dimensions = dims;
     if (rows == 0 || dims == 0) return;
+
+    size_t valid_counts[LOGANA_MAX_DIMENSIONS] = {0};
     for (size_t d = 0; d < dims; ++d) {
-        job->summary.min[d] = job->matrix.values[d];
-        job->summary.max[d] = job->matrix.values[d];
+        job->summary.min[d] = INFINITY;
+        job->summary.max[d] = -INFINITY;
     }
+
     double entropy_hist[32] = {0};
-    double slope_num = 0.0;
-    double slope_den = 0.0;
-    double x_mean = ((double)rows - 1.0) / 2.0;
+
+    /* --- Timestamp-based trend (slope) --- */
+    bool has_real_ts = false;
+    uint64_t min_ts = UINT64_MAX;
+    uint64_t max_ts = 0;
     for (size_t r = 0; r < rows; ++r) {
-        double primary = job->matrix.values[r * dims];
-        double bucket = fmin(31.0, fmax(0.0, floor(fabs(primary))));
-        entropy_hist[(size_t)bucket] += 1.0;
-        slope_num += (((double)r - x_mean) * primary);
-        slope_den += ((double)r - x_mean) * ((double)r - x_mean);
-        for (size_t d = 0; d < dims; ++d) {
-            double value = job->matrix.values[r * dims + d];
-            job->summary.mean[d] += value;
-            if (value < job->summary.min[d]) job->summary.min[d] = value;
-            if (value > job->summary.max[d]) job->summary.max[d] = value;
+        if (job->matrix.timestamps[r] > 0 && job->matrix.timestamps[r] != (uint64_t)r * 1000ULL) {
+            has_real_ts = true;
+            if (job->matrix.timestamps[r] < min_ts) min_ts = job->matrix.timestamps[r];
+            if (job->matrix.timestamps[r] > max_ts) max_ts = job->matrix.timestamps[r];
         }
     }
-    for (size_t d = 0; d < dims; ++d) {
-        job->summary.mean[d] /= (double)rows;
+    /* If real timestamps span more than 1 year, treat as garbage/mixed format */
+    if (has_real_ts && max_ts > min_ts && (max_ts - min_ts) > (uint64_t)(365LL * 86400 * 1000)) {
+        has_real_ts = false;
     }
+    double t_mean = 0.0;
+    if (has_real_ts) {
+        double t_sum = 0.0;
+        for (size_t r = 0; r < rows; ++r) t_sum += (double)job->matrix.timestamps[r];
+        t_mean = t_sum / (double)rows;
+    } else {
+        t_mean = ((double)rows - 1.0) / 2.0;
+    }
+
+    double slope_num = 0.0;
+    double slope_den = 0.0;
+
+    for (size_t r = 0; r < rows; ++r) {
+        bool primary_valid = (!job->matrix.valid_mask || job->matrix.valid_mask[r * dims]);
+        double primary = job->matrix.values[r * dims];
+        double bucket = fmin(31.0, fmax(0.0, floor(fabs(primary))));
+        if (primary_valid) entropy_hist[(size_t)bucket] += 1.0;
+
+        double t = has_real_ts ? (double)job->matrix.timestamps[r] : (double)r;
+        double dt = t - t_mean;
+        if (primary_valid) {
+            slope_num += dt * primary;
+            slope_den += dt * dt;
+        }
+
+        for (size_t d = 0; d < dims; ++d) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+            double value = job->matrix.values[r * dims + d];
+            if (valid_counts[d] == 0) {
+                job->summary.min[d] = value;
+                job->summary.max[d] = value;
+            } else {
+                if (value < job->summary.min[d]) job->summary.min[d] = value;
+                if (value > job->summary.max[d]) job->summary.max[d] = value;
+            }
+            job->summary.mean[d] += value;
+            ++valid_counts[d];
+        }
+    }
+
+    for (size_t d = 0; d < dims; ++d) {
+        if (valid_counts[d] > 0) {
+            job->summary.mean[d] /= (double)valid_counts[d];
+        } else {
+            job->summary.min[d] = 0.0;
+            job->summary.max[d] = 0.0;
+            job->summary.mean[d] = 0.0;
+        }
+    }
+
     size_t outliers = 0;
     for (size_t r = 0; r < rows; ++r) {
         for (size_t d = 0; d < dims; ++d) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
             double delta = job->matrix.values[r * dims + d] - job->summary.mean[d];
             job->summary.stddev[d] += delta * delta;
         }
     }
     for (size_t d = 0; d < dims; ++d) {
-        job->summary.stddev[d] = sqrt(job->summary.stddev[d] / (double)rows);
+        job->summary.stddev[d] = valid_counts[d] > 0 ? sqrt(job->summary.stddev[d] / (double)valid_counts[d]) : 0.0;
     }
+
     for (size_t r = 0; r < rows; ++r) {
         double score = 0.0;
+        size_t valid_d = 0;
         for (size_t d = 0; d < dims; ++d) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
             double sigma = job->summary.stddev[d] > 0.0001 ? job->summary.stddev[d] : 1.0;
             double z = (job->matrix.values[r * dims + d] - job->summary.mean[d]) / sigma;
             score += z * z;
+            ++valid_d;
         }
-        if (score > 9.0) ++outliers;
+        if (valid_d > 0 && score > 9.0) ++outliers;
     }
+
     for (size_t i = 0; i < 32; ++i) {
         if (entropy_hist[i] <= 0.0) continue;
         double p = entropy_hist[i] / (double)rows;
         job->summary.entropy -= p * log2(p);
     }
+
     job->summary.slope = slope_den > 0.0 ? (slope_num / slope_den) : 0.0;
     job->summary.outlier_ratio = rows ? ((double)outliers / (double)rows) : 0.0;
 }
 
 static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count, size_t dims, float *candidate) {
     for (size_t i = 0; i < mode_count; ++i) {
-        if (logana_distance_sq(modes + i * dims, candidate, dims) < 0.04) return i;
+        if (logana_distance_sq(modes + i * dims, candidate, NULL, NULL, dims) < 0.04) return i;
     }
     memcpy((float *)(modes + mode_count * dims), candidate, dims * sizeof(float));
     return mode_count;
@@ -278,7 +596,8 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
         for (size_t r = 0; r < rows; ++r) {
             double nearest = 1e18;
             for (size_t j = 0; j < c; ++j) {
-                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + j * dims, dims);
+                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + j * dims,
+                                                  job->matrix.valid_mask + r * dims, NULL, dims);
                 if (dist < nearest) nearest = dist;
             }
             if (nearest > best_dist) {
@@ -295,7 +614,8 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
             double best_dist = 1e18;
             int best = 0;
             for (size_t c = 0; c < k; ++c) {
-                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + c * dims, dims);
+                double dist = logana_distance_sq(job->matrix.values + r * dims, centers + c * dims,
+                                                  job->matrix.valid_mask + r * dims, NULL, dims);
                 if (dist < best_dist) {
                     best_dist = dist;
                     best = (int)c;
@@ -303,11 +623,25 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k) {
             }
             job->matrix.labels[r] = best;
             counts[best]++;
-            for (size_t d = 0; d < dims; ++d) accum[best * dims + d] += job->matrix.values[r * dims + d];
+            for (size_t d = 0; d < dims; ++d) {
+                if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+                accum[best * dims + d] += job->matrix.values[r * dims + d];
+            }
         }
         for (size_t c = 0; c < k; ++c) {
             if (!counts[c]) continue;
-            for (size_t d = 0; d < dims; ++d) centers[c * dims + d] = (float)(accum[c * dims + d] / (double)counts[c]);
+            for (size_t d = 0; d < dims; ++d) {
+                /* Only update dimensions that had valid contributions */
+                if (job->matrix.valid_mask) {
+                    size_t valid_cnt = 0;
+                    for (size_t r = 0; r < rows; ++r) {
+                        if (job->matrix.labels[r] == (int)c && job->matrix.valid_mask[r * dims + d]) valid_cnt++;
+                    }
+                    if (valid_cnt) centers[c * dims + d] = (float)(accum[c * dims + d] / (double)valid_cnt);
+                } else {
+                    centers[c * dims + d] = (float)(accum[c * dims + d] / (double)counts[c]);
+                }
+            }
         }
     }
     return k;
@@ -324,7 +658,9 @@ static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_sample
         if (labels[i] != -2) continue;
         size_t count = 0;
         for (size_t j = 0; j < rows; ++j) {
-            if (logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims, dims) <= eps_sq) count++;
+            if (logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims) <= eps_sq)
+                count++;
         }
         if (count < min_samples) {
             labels[i] = -1;
@@ -333,7 +669,8 @@ static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_sample
         labels[i] = (int)cluster_id;
         for (size_t j = 0; j < rows; ++j) {
             if (labels[j] == -2 &&
-                logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims, dims) <= eps_sq) {
+                logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims) <= eps_sq) {
                 labels[j] = (int)cluster_id;
             }
         }
@@ -352,7 +689,8 @@ static size_t logana_run_birch(logana_job_t *job, double threshold) {
         size_t best = 0;
         double best_dist = 1e18;
         for (size_t c = 0; c < cluster_count; ++c) {
-            double dist = logana_distance_sq(job->matrix.values + r * dims, centroids + c * dims, dims);
+            double dist = logana_distance_sq(job->matrix.values + r * dims, centroids + c * dims,
+                                              job->matrix.valid_mask + r * dims, NULL, dims);
             if (dist < best_dist) {
                 best_dist = dist;
                 best = c;
@@ -365,6 +703,7 @@ static size_t logana_run_birch(logana_job_t *job, double threshold) {
         job->matrix.labels[r] = (int)best;
         counts[best]++;
         for (size_t d = 0; d < dims; ++d) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
             centroids[best * dims + d] =
                 (float)(((double)centroids[best * dims + d] * (double)(counts[best] - 1) +
                          (double)job->matrix.values[r * dims + d]) / (double)counts[best]);
@@ -385,8 +724,12 @@ static size_t logana_run_mean_shift(logana_job_t *job, double bandwidth) {
             double accum[LOGANA_MAX_DIMENSIONS] = {0};
             size_t count = 0;
             for (size_t j = 0; j < rows; ++j) {
-                if (logana_distance_sq(point, job->matrix.values + j * dims, dims) <= bandwidth * bandwidth) {
-                    for (size_t d = 0; d < dims; ++d) accum[d] += job->matrix.values[j * dims + d];
+                if (logana_distance_sq(point, job->matrix.values + j * dims,
+                                       NULL, job->matrix.valid_mask + j * dims, dims) <= bandwidth * bandwidth) {
+                    for (size_t d = 0; d < dims; ++d) {
+                        if (job->matrix.valid_mask && !job->matrix.valid_mask[j * dims + d]) continue;
+                        accum[d] += job->matrix.values[j * dims + d];
+                    }
                     count++;
                 }
             }
@@ -408,7 +751,8 @@ static size_t logana_run_optics(logana_job_t *job, double eps, size_t min_sample
     for (size_t i = 0; i < rows; ++i) {
         size_t count = 0;
         for (size_t j = 0; j < rows; ++j) {
-            double dist = sqrt(logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims, dims));
+            double dist = sqrt(logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                                   job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims));
             if (dist <= eps) count++;
         }
         neighbors[i].idx = i;
@@ -451,10 +795,14 @@ static size_t logana_run_gmm(logana_job_t *job, size_t k) {
             double norm = 0.0;
             for (size_t c = 0; c < k; ++c) {
                 double dist = 0.0;
+                size_t valid_d = 0;
                 for (size_t d = 0; d < dims; ++d) {
+                    if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
                     double delta = job->matrix.values[r * dims + d] - means[c * dims + d];
                     dist += (delta * delta) / variances[c * dims + d];
+                    ++valid_d;
                 }
+                if (valid_d > 0) dist *= (double)dims / (double)valid_d; /* scale like Euclidean */
                 probs[c] = weights[c] * exp(-0.5 * dist);
                 norm += probs[c];
             }
@@ -468,7 +816,10 @@ static size_t logana_run_gmm(logana_job_t *job, size_t k) {
                     best_resp = resp;
                     best = (int)c;
                 }
-                for (size_t d = 0; d < dims; ++d) mean_accum[c * dims + d] += resp * job->matrix.values[r * dims + d];
+                for (size_t d = 0; d < dims; ++d) {
+                    if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+                    mean_accum[c * dims + d] += resp * job->matrix.values[r * dims + d];
+                }
             }
             job->matrix.labels[r] = best;
         }
@@ -495,7 +846,8 @@ static size_t logana_run_agglomerative(logana_job_t *job, size_t target_clusters
             if (active[i] < 0) continue;
             for (size_t j = i + 1; j < rows; ++j) {
                 if (active[j] < 0) continue;
-                double dist = logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims, dims);
+                double dist = logana_distance_sq(job->matrix.values + i * dims, job->matrix.values + j * dims,
+                                                  job->matrix.valid_mask + i * dims, job->matrix.valid_mask + j * dims, dims);
                 if (dist < best) {
                     best = dist;
                     best_i = i;
@@ -549,6 +901,23 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
 
 static void logana_register_job(logana_engine_t *engine, logana_job_t *job) {
     pthread_mutex_lock(&engine->jobs_lock);
+    /* Evict oldest completed jobs to prevent stale data pollution */
+    if (engine->job_count >= LOGANA_MAX_JOBS) {
+        for (size_t i = 0; i < engine->job_count; ++i) {
+            logana_job_t *j = engine->jobs[i];
+            if (!j) continue;
+            pthread_mutex_lock(&j->lock);
+            bool done = (j->status == LOGANA_JOB_READY || j->status == LOGANA_JOB_FAILED);
+            pthread_mutex_unlock(&j->lock);
+            if (done) {
+                logana_job_destroy(j);
+                memmove(&engine->jobs[i], &engine->jobs[i + 1],
+                        (engine->job_count - i - 1) * sizeof(logana_job_t *));
+                engine->job_count--;
+                break;
+            }
+        }
+    }
     if (engine->job_count < LOGANA_MAX_JOBS) {
         engine->jobs[engine->job_count++] = job;
     }
@@ -615,6 +984,8 @@ void logana_job_destroy(logana_job_t *job) {
     pthread_mutex_destroy(&job->lock);
     free(job->payload);
     free(job->matrix.values);
+    free(job->matrix.timestamps);
+    free(job->matrix.valid_mask);
     free(job->matrix.labels);
     free(job->svg);
     free(job->html);
