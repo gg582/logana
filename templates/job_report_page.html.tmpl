@@ -222,43 +222,74 @@
         height: auto;
       }
 
-      /* ---------- Insights (table) ---------- */
+      /* ---------- Insights (horizontal table) ---------- */
       .report-insights {
         display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
       }
       .report-insights-table {
         width: 100%;
         border-collapse: collapse;
         font-size: 14px;
       }
-      .report-insights-table tr {
+      .report-insights-table-horizontal thead tr {
         border-bottom: 1px solid var(--line);
-        transition: background 0.25s ease;
       }
-      .report-insights-table tr:hover {
-        background: rgba(255, 250, 241, 0.35);
-      }
-      .report-insights-table tr:last-child {
-        border-bottom: none;
-      }
-      .report-insights-table th {
-        width: 1%;
-        white-space: nowrap;
-        text-align: left;
-        padding: 12px 16px;
-        font-weight: 700;
-        font-size: 14px;
+      .report-insights-table-horizontal th,
+      .report-insights-table-horizontal td {
+        padding: 14px 16px;
         vertical-align: top;
+        min-width: 140px;
       }
-      .report-insights-table td {
-        padding: 12px 16px;
+      .report-insights-table-horizontal th {
+        text-align: left;
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: 0.02em;
+        text-transform: capitalize;
+        white-space: nowrap;
+      }
+      .report-insights-table-horizontal td {
         color: var(--muted);
         line-height: 1.6;
-        vertical-align: top;
+        border-bottom: none;
+      }
+      .report-insights-table-horizontal tbody tr:hover {
+        background: rgba(255, 250, 241, 0.35);
       }
       .report-insight-calm { background: rgba(198, 223, 210, 0.25); }
       .report-insight-warm { background: rgba(241, 217, 170, 0.28); }
       .report-insight-hot  { background: rgba(239, 193, 173, 0.30); }
+      @media (max-width: 740px) {
+        .report-insights-table-horizontal thead {
+          display: none;
+        }
+        .report-insights-table-horizontal tbody,
+        .report-insights-table-horizontal tr,
+        .report-insights-table-horizontal td {
+          display: block;
+          width: 100%;
+        }
+        .report-insights-table-horizontal tbody tr {
+          border-bottom: 1px solid var(--line);
+        }
+        .report-insights-table-horizontal td {
+          position: relative;
+          padding: 12px 12px 12px 40%;
+          border-bottom: none;
+          min-width: auto;
+        }
+        .report-insights-table-horizontal td::before {
+          content: attr(data-title);
+          position: absolute;
+          left: 16px;
+          top: 12px;
+          font-weight: 700;
+          color: var(--ink);
+          white-space: nowrap;
+        }
+      }
 
       /* ---------- Error ---------- */
       .report-error {

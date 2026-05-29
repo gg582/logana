@@ -1,3 +1,6 @@
 node_modules/
 .next/
 .deps/
+obj/
+bin/logana-engine
+test_analytics
