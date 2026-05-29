@@ -1281,7 +1281,7 @@ export default function Home() {
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                 {result?.jobId ? (
                   <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
-                    Open SSR report
+                    Open report
                   </a>
                 ) : null}
                 {engineSvgMarkup ? (
