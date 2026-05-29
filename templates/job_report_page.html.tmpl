@@ -126,28 +126,33 @@
 
       /* ---------- Metrics ---------- */
       .report-metrics {
-        display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
-        gap: 16px;
-        align-items: start;
+        display: flex;
+        gap: 0;
+        align-items: stretch;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
       }
       .report-metrics article {
+        flex: 1;
         min-width: 0;
-        padding: 20px 22px;
-        border-radius: 16px;
-        border: 1px solid var(--line);
-        background: var(--card);
-        box-shadow: 0 1px 4px rgba(23, 19, 17, 0.03);
+        padding: 16px 20px;
+        border-right: 1px solid var(--line);
+        background: none;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .report-metrics article:last-child {
+        border-right: none;
       }
       .report-metrics span {
         display: block;
         color: var(--muted);
         font-size: 12px;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
         letter-spacing: 0.02em;
       }
       .report-metrics strong {
-        font-size: 24px;
+        font-size: 22px;
         font-weight: 700;
         color: var(--ink);
       }
@@ -232,12 +237,22 @@
       /* ---------- Responsive ---------- */
       @media (max-width: 980px) {
         .page { padding: 24px 16px 48px; }
-        .report-metrics { grid-template-columns: repeat(3, 1fr); }
+        .report-metrics { flex-wrap: wrap; }
+        .report-metrics article {
+          flex: 1 1 30%;
+          border-right: 1px solid var(--line);
+          border-bottom: 1px solid var(--line);
+        }
+        .report-metrics article:nth-child(3n) { border-right: none; }
         .report-grid { grid-template-columns: 1fr; }
         .report-hero { flex-direction: column; }
       }
       @media (max-width: 560px) {
-        .report-metrics { grid-template-columns: repeat(2, 1fr); }
+        .report-metrics article {
+          flex: 1 1 45%;
+        }
+        .report-metrics article:nth-child(3n) { border-right: 1px solid var(--line); }
+        .report-metrics article:nth-child(2n) { border-right: none; }
         .report-panel { padding: 20px; }
         .report-hero { padding: 24px; }
       }

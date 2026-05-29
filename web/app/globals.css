@@ -359,32 +359,32 @@ body {
 
 /* ─────────── Metrics ─────────── */
 .metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  display: flex;
+  gap: 0;
   margin-bottom: 22px;
-  align-items: start;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
 .metric {
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.035);
+  flex: 1;
   padding: 16px 18px;
+  border-right: 1px solid var(--line);
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
   min-width: 0;
-  transition:
-    transform var(--transition-base) var(--ease-out-expo),
-    background var(--transition-base) var(--ease-out-expo),
-    border-color var(--transition-base) var(--ease-out-expo),
-    box-shadow var(--transition-base) var(--ease-out-expo);
   cursor: default;
 }
 
+.metric:last-child {
+  border-right: none;
+}
+
 .metric:hover {
-  transform: translateY(-5px);
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 216, 167, 0.22);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+  transform: none;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .metric span {
@@ -504,30 +504,58 @@ body {
   overflow-wrap: break-word;
 }
 
+/* Report metrics inside preview: divider list instead of cards */
+.preview .report-metrics {
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.preview .report-metrics article {
+  flex: 1;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.preview .report-metrics article:last-child {
+  border-right: none;
+}
+
+.preview .report-metrics article:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 /* ─────────── Run summary ─────────── */
 .run-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  align-items: start;
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
-.run-summary div {
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
+.run-summary > div {
+  flex: 1;
   padding: 14px;
+  border-right: 1px solid var(--line);
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
   min-width: 0;
-  transition:
-    transform var(--transition-base) var(--ease-out-expo),
-    background var(--transition-base) var(--ease-out-expo),
-    border-color var(--transition-base) var(--ease-out-expo);
 }
 
-.run-summary div:hover {
-  transform: translateY(-3px);
-  background: rgba(255, 255, 255, 0.055);
-  border-color: rgba(255, 216, 167, 0.2);
+.run-summary > div:last-child {
+  border-right: none;
+}
+
+.run-summary > div:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .run-summary span {
@@ -548,7 +576,7 @@ body {
   overflow-wrap: break-word;
 }
 
-.run-summary div:hover strong {
+.run-summary > div:hover strong {
   color: var(--accent-soft);
 }
 
@@ -909,7 +937,21 @@ body {
   }
 
   .metrics,
-  .run-summary,
+  .run-summary {
+    flex-wrap: wrap;
+  }
+
+  .metrics .metric,
+  .run-summary > div {
+    flex: 1 1 45%;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .metrics .metric:nth-child(2n),
+  .run-summary > div:nth-child(2n) {
+    border-right: none;
+  }
+
   .preview .report-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -922,7 +964,34 @@ body {
   }
 
   .metrics,
-  .run-summary,
+  .run-summary {
+    flex-direction: column;
+  }
+
+  .metrics .metric,
+  .run-summary > div {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .metrics .metric:last-child,
+  .run-summary > div:last-child {
+    border-bottom: none;
+  }
+
+  .preview .report-metrics {
+    flex-direction: column;
+  }
+
+  .preview .report-metrics article {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .preview .report-metrics article:last-child {
+    border-bottom: none;
+  }
+
   .preview .report-grid {
     grid-template-columns: 1fr;
   }
