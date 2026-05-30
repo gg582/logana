@@ -37,6 +37,7 @@ typedef struct {
     double entropy;
     double slope;
     double outlier_ratio;
+    double cluster_balance;
     const char *svg;
     const char *html;
     const char *error;
@@ -54,6 +55,7 @@ static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapsh
     snapshot->entropy = job->summary.entropy;
     snapshot->slope = job->summary.slope;
     snapshot->outlier_ratio = job->summary.outlier_ratio;
+    snapshot->cluster_balance = job->summary.cluster_balance;
     snapshot->svg = job->svg;
     snapshot->html = job->html;
     snapshot->error = job->error;
@@ -121,27 +123,15 @@ static void logana_populate_insights(cJSON *insights, const logana_job_snapshot_
         logana_add_insight(insights, "Noise signal", detail, "hot");
     }
 
-    // Cluster balance
+    // Cluster balance / collapse guard
     if (snapshot->cluster_count > 1 && snapshot->row_count > 0) {
-        size_t *counts = calloc(snapshot->cluster_count, sizeof(size_t));
-        if (counts && job->matrix.labels) {
-            for (size_t i = 0; i < snapshot->row_count; ++i) {
-                int label = job->matrix.labels[i];
-                if (label >= 0 && (size_t)label < snapshot->cluster_count) counts[label]++;
-            }
-            size_t max_count = 0, min_count = snapshot->row_count;
-            for (size_t c = 0; c < snapshot->cluster_count; ++c) {
-                if (counts[c] > max_count) max_count = counts[c];
-                if (counts[c] < min_count) min_count = counts[c];
-            }
-            double balance = max_count > 0 ? (double)min_count / (double)max_count : 0.0;
-            snprintf(detail, sizeof(detail),
-                     "Cluster balance is %.0f%% (largest %zu vs smallest %zu). %s",
-                     balance * 100.0, max_count, min_count,
-                     balance < 0.3 ? "Highly imbalanced — review feature scaling." : "Reasonably balanced.");
-            logana_add_insight(insights, "Balance", detail, balance < 0.3 ? "warm" : "calm");
-        }
-        free(counts);
+        double balance = snapshot->cluster_balance;
+        snprintf(detail, sizeof(detail),
+                 "Cluster balance is %.0f%%. %s",
+                 balance * 100.0,
+                 balance < 0.3 ? "Highly imbalanced — possible collapse detected." :
+                 balance < 0.6 ? "Moderately imbalanced." : "Reasonably balanced.");
+        logana_add_insight(insights, "Balance", detail, balance < 0.3 ? "warm" : "calm");
     }
 }
 

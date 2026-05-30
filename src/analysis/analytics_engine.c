@@ -157,6 +157,27 @@ static int logana_extract_number(const char *line, const char *key, bool case_se
     return logana_safe_strtod(start, out, out_valid, clamp_negative);
 }
 
+static int logana_extract_string(const char *line, const char *key, bool case_sensitive,
+                                 char *out, size_t out_cap) {
+    const char *found = case_sensitive ? strstr(line, key) : logana_find_key_ci(line, key);
+    if (!found) return 0;
+    const char *colon = strchr(found, ':');
+    if (!colon) return 0;
+    const char *start = colon + 1;
+    while (*start && isspace((unsigned char)*start)) ++start;
+    if (*start == '"' || *start == '\'') {
+        char quote = *start++;
+        const char *end = start;
+        while (*end && *end != quote) ++end;
+        size_t len = (size_t)(end - start);
+        if (len >= out_cap) len = out_cap - 1;
+        memcpy(out, start, len);
+        out[len] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
 static size_t logana_count_chars(const char *line, char needle) {
     size_t count = 0;
     for (const char *p = line; *p; ++p) {
@@ -395,8 +416,9 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     float *values = malloc(row_capacity * dims * sizeof(float));
     uint64_t *timestamps = malloc(row_capacity * sizeof(uint64_t));
     uint8_t *valid_mask = malloc(row_capacity * dims * sizeof(uint8_t));
-    if (!values || !timestamps || !valid_mask) {
-        free(values); free(timestamps); free(valid_mask);
+    uint64_t *categories = calloc(row_capacity, sizeof(uint64_t));
+    if (!values || !timestamps || !valid_mask || !categories) {
+        free(values); free(timestamps); free(valid_mask); free(categories);
         return 0;
     }
 
@@ -411,10 +433,12 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
                 float *grown_v = realloc(values, new_cap * dims * sizeof(float));
                 uint64_t *grown_t = realloc(timestamps, new_cap * sizeof(uint64_t));
                 uint8_t *grown_m = realloc(valid_mask, new_cap * dims * sizeof(uint8_t));
-                if (!grown_v || !grown_t || !grown_m) break;
+                uint64_t *grown_c = realloc(categories, new_cap * sizeof(uint64_t));
+                if (!grown_v || !grown_t || !grown_m || !grown_c) break;
                 values = grown_v;
                 timestamps = grown_t;
                 valid_mask = grown_m;
+                categories = grown_c;
                 row_capacity = new_cap;
             }
 
@@ -486,7 +510,24 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
                 }
             }
 
-            /* 4) Synthetic fallback so the row is never completely empty */
+            /* 4) Category keys for cardinality-aware grouping */
+            char cat_buf[256] = {0};
+            size_t cat_off = 0;
+            for (size_t c = 0; c < engine->config.category_key_count; ++c) {
+                char val[64] = {0};
+                if (logana_extract_string(cursor, engine->config.category_keys[c],
+                                          engine->config.case_sensitive, val, sizeof(val))) {
+                    size_t vlen = strlen(val);
+                    if (cat_off + vlen + 1 < sizeof(cat_buf)) {
+                        if (cat_off > 0) cat_buf[cat_off++] = '|';
+                        memcpy(cat_buf + cat_off, val, vlen);
+                        cat_off += vlen;
+                    }
+                }
+            }
+            categories[rows] = cat_off > 0 ? logana_hash64(cat_buf, cat_off) : 0;
+
+            /* 5) Synthetic fallback so the row is never completely empty */
             if (captured == 0) {
                 extracted[captured] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
                 extracted_valid[captured] = true;
@@ -515,6 +556,7 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     job->matrix.values = values;
     job->matrix.timestamps = timestamps;
     job->matrix.valid_mask = valid_mask;
+    job->matrix.categories = categories;
     job->matrix.row_count = rows;
     job->matrix.dimensions = dims;
     return rows;
@@ -645,7 +687,7 @@ static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count,
     return mode_count;
 }
 
-static size_t logana_run_kmeans(logana_job_t *job, size_t k,
+static size_t logana_run_kmeans(logana_job_t *job, size_t k, size_t seed_offset,
                                 logana_distance_fn_t dist_fn,
                                 const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
@@ -653,7 +695,7 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k,
     if (!rows) return 0;
     if (k > rows) k = rows;
     float centers[LOGANA_MAX_DIMENSIONS * 4] = {0};
-    memcpy(centers, job->matrix.values, dims * sizeof(float));
+    memcpy(centers, job->matrix.values + (seed_offset % rows) * dims, dims * sizeof(float));
     for (size_t c = 1; c < k; ++c) {
         double best_dist = -1.0;
         size_t best_idx = 0;
@@ -709,6 +751,169 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k,
         }
     }
     return k;
+}
+
+static double logana_compute_collapse_score(size_t rows, int *labels, size_t k) {
+    if (rows == 0 || k == 0) return 1.0;
+    size_t *counts = calloc(k, sizeof(size_t));
+    if (!counts) return 1.0;
+    for (size_t i = 0; i < rows; ++i) {
+        int lb = labels[i];
+        if (lb >= 0 && (size_t)lb < k) counts[lb]++;
+    }
+    size_t max_count = 0;
+    size_t empty = 0;
+    for (size_t c = 0; c < k; ++c) {
+        if (counts[c] > max_count) max_count = counts[c];
+        if (counts[c] == 0) empty++;
+    }
+    free(counts);
+    double dominance = (double)max_count / (double)rows;
+    double empty_penalty = (double)empty / (double)k;
+    return dominance * 0.6 + empty_penalty * 0.4;
+}
+
+static size_t logana_run_kmeans_auto(logana_job_t *job,
+                                     logana_distance_fn_t dist_fn,
+                                     const logana_analysis_summary_t *summary) {
+    size_t rows = job->matrix.row_count;
+    if (!rows) return 0;
+    if (rows == 1) {
+        job->matrix.labels[0] = 0;
+        return 1;
+    }
+
+    int *tmp_labels = calloc(rows, sizeof(int));
+    int *best_labels = calloc(rows, sizeof(int));
+    if (!tmp_labels || !best_labels) {
+        free(tmp_labels); free(best_labels);
+        return logana_run_kmeans(job, 2, 0, dist_fn, summary);
+    }
+
+    double best_score = 2.0;
+    size_t best_actual_k = 1;
+
+    for (size_t k = 2; k <= 4; ++k) {
+        if (k > rows) break;
+        for (size_t seed = 0; seed < 3; ++seed) {
+            memset(tmp_labels, 0, rows * sizeof(int));
+            logana_job_t trial_job = *job;
+            trial_job.matrix.labels = tmp_labels;
+            size_t actual_k = logana_run_kmeans(&trial_job, k, seed * 7, dist_fn, summary);
+            double score = logana_compute_collapse_score(rows, tmp_labels, actual_k);
+            if (score < best_score) {
+                best_score = score;
+                best_actual_k = actual_k;
+                memcpy(best_labels, tmp_labels, rows * sizeof(int));
+            }
+        }
+    }
+
+    memcpy(job->matrix.labels, best_labels, rows * sizeof(int));
+    free(tmp_labels);
+    free(best_labels);
+    return best_actual_k;
+}
+
+static size_t logana_cluster_by_category(logana_job_t *job, size_t target_k,
+                                         logana_distance_fn_t dist_fn,
+                                         const logana_analysis_summary_t *summary,
+                                         bool use_auto) {
+    size_t rows = job->matrix.row_count;
+    size_t dims = job->matrix.dimensions;
+    uint64_t *cats = job->matrix.categories;
+    if (!cats || rows == 0) {
+        if (use_auto) return logana_run_kmeans_auto(job, dist_fn, summary);
+        return logana_run_kmeans(job, target_k, 0, dist_fn, summary);
+    }
+
+    uint64_t unique_cats[256];
+    size_t cat_idx_map[LOGANA_MAX_ROWS < 4096 ? LOGANA_MAX_ROWS : 4096];
+    size_t unique_count = 0;
+
+    if (rows > 4096) {
+        if (use_auto) return logana_run_kmeans_auto(job, dist_fn, summary);
+        return logana_run_kmeans(job, target_k, 0, dist_fn, summary);
+    }
+
+    for (size_t r = 0; r < rows; ++r) {
+        size_t found = (size_t)-1;
+        for (size_t u = 0; u < unique_count; ++u) {
+            if (unique_cats[u] == cats[r]) { found = u; break; }
+        }
+        if (found == (size_t)-1) {
+            if (unique_count >= 256) {
+                if (use_auto) return logana_run_kmeans_auto(job, dist_fn, summary);
+                return logana_run_kmeans(job, target_k, 0, dist_fn, summary);
+            }
+            found = unique_count;
+            unique_cats[unique_count++] = cats[r];
+        }
+        cat_idx_map[r] = found;
+    }
+
+    if (unique_count <= 1) {
+        if (use_auto) return logana_run_kmeans_auto(job, dist_fn, summary);
+        return logana_run_kmeans(job, target_k, 0, dist_fn, summary);
+    }
+
+    size_t cat_rows[256] = {0};
+    for (size_t r = 0; r < rows; ++r) cat_rows[cat_idx_map[r]]++;
+
+    size_t global_label_offset = 0;
+    for (size_t u = 0; u < unique_count; ++u) {
+        size_t sub_rows = cat_rows[u];
+        if (sub_rows == 0) continue;
+
+        float *sub_values = malloc(sub_rows * dims * sizeof(float));
+        uint8_t *sub_mask = malloc(sub_rows * dims * sizeof(uint8_t));
+        uint64_t *sub_ts = malloc(sub_rows * sizeof(uint64_t));
+        int *sub_labels = calloc(sub_rows, sizeof(int));
+        if (!sub_values || !sub_mask || !sub_ts || !sub_labels) {
+            free(sub_values); free(sub_mask); free(sub_ts); free(sub_labels);
+            continue;
+        }
+
+        size_t sr = 0;
+        for (size_t r = 0; r < rows; ++r) {
+            if (cat_idx_map[r] != u) continue;
+            memcpy(sub_values + sr * dims, job->matrix.values + r * dims, dims * sizeof(float));
+            memcpy(sub_mask + sr * dims, job->matrix.valid_mask + r * dims, dims * sizeof(uint8_t));
+            sub_ts[sr] = job->matrix.timestamps[r];
+            sr++;
+        }
+
+        logana_job_t sub_job = {0};
+        sub_job.matrix.values = sub_values;
+        sub_job.matrix.valid_mask = sub_mask;
+        sub_job.matrix.timestamps = sub_ts;
+        sub_job.matrix.row_count = sub_rows;
+        sub_job.matrix.dimensions = dims;
+        sub_job.matrix.labels = sub_labels;
+
+        size_t sub_k = target_k;
+        if (sub_k > sub_rows) sub_k = sub_rows;
+        if (sub_k < 1) sub_k = 1;
+
+        size_t sub_clusters;
+        if (use_auto) {
+            sub_clusters = logana_run_kmeans_auto(&sub_job, dist_fn, summary);
+        } else {
+            sub_clusters = logana_run_kmeans(&sub_job, sub_k, 0, dist_fn, summary);
+        }
+
+        sr = 0;
+        for (size_t r = 0; r < rows; ++r) {
+            if (cat_idx_map[r] != u) continue;
+            job->matrix.labels[r] = (int)(sub_labels[sr] + global_label_offset);
+            sr++;
+        }
+        global_label_offset += sub_clusters;
+
+        free(sub_values); free(sub_mask); free(sub_ts); free(sub_labels);
+    }
+
+    return global_label_offset;
 }
 
 static size_t logana_run_dbscan(logana_job_t *job, double eps, size_t min_samples,
@@ -960,7 +1165,16 @@ static size_t logana_cluster(logana_engine_t *engine, logana_job_t *job,
     }
 
     switch (job->algorithm) {
-        case LOGANA_ALGO_KMEANS_PP: return logana_run_kmeans(job, 3, dist_fn, summary);
+        case LOGANA_ALGO_KMEANS_PP:
+            if (job->matrix.categories && job->matrix.row_count > 0) {
+                return logana_cluster_by_category(job, 3, dist_fn, summary, false);
+            }
+            return logana_run_kmeans(job, 3, 0, dist_fn, summary);
+        case LOGANA_ALGO_AUTO:
+            if (job->matrix.categories && job->matrix.row_count > 0) {
+                return logana_cluster_by_category(job, 3, dist_fn, summary, true);
+            }
+            return logana_run_kmeans_auto(job, dist_fn, summary);
         case LOGANA_ALGO_DBSCAN: return logana_run_dbscan(job, engine->config.dbscan_eps, engine->config.dbscan_min_samples, dist_fn, summary);
         case LOGANA_ALGO_BIRCH: return logana_run_birch(job, engine->config.dbscan_eps, dist_fn, summary);
         case LOGANA_ALGO_MEAN_SHIFT: return logana_run_mean_shift(job, engine->config.dbscan_eps * 2.0, dist_fn, summary);
@@ -980,6 +1194,27 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
     }
     logana_compute_summary(job);
     job->summary.cluster_count = logana_cluster(engine, job, &job->summary);
+
+    /* Compute cluster balance (collapse metric) */
+    if (job->summary.cluster_count > 1 && job->matrix.labels) {
+        size_t *counts = calloc(job->summary.cluster_count, sizeof(size_t));
+        if (counts) {
+            for (size_t i = 0; i < job->matrix.row_count; ++i) {
+                int lb = job->matrix.labels[i];
+                if (lb >= 0 && (size_t)lb < job->summary.cluster_count) counts[lb]++;
+            }
+            size_t max_c = 0, min_c = job->matrix.row_count;
+            for (size_t c = 0; c < job->summary.cluster_count; ++c) {
+                if (counts[c] > max_c) max_c = counts[c];
+                if (counts[c] < min_c) min_c = counts[c];
+            }
+            job->summary.cluster_balance = max_c > 0 ? (double)min_c / (double)max_c : 0.0;
+            free(counts);
+        }
+    } else {
+        job->summary.cluster_balance = job->summary.cluster_count == 1 ? 1.0 : 0.0;
+    }
+
     return 0;
 }
 
@@ -1071,6 +1306,7 @@ void logana_job_destroy(logana_job_t *job) {
     free(job->matrix.timestamps);
     free(job->matrix.valid_mask);
     free(job->matrix.labels);
+    free(job->matrix.categories);
     free(job->svg);
     free(job->html);
     free(job);

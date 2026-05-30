@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -224,6 +225,69 @@ static void emit_diagnostics(const LogDataset *ds, const ClusteringControl *ctrl
 }
 
 /* ------------------------------------------------------------------ */
+/* 4. Cardinality guard: group rows with identical validity patterns.   */
+/* ------------------------------------------------------------------ */
+
+typedef struct RowGroup {
+    uint32_t pattern;   /* bitmask of valid dimensions */
+    size_t *indices;
+    size_t count;
+    size_t capacity;
+} RowGroup;
+
+static uint32_t compute_validity_pattern(const LogDataset *ds, size_t row)
+{
+    uint32_t pattern = 0;
+    for (size_t i = 0; i < ds->field_count; ++i) {
+        if (row < ds->fields[i].row_count && ds->fields[i].valid[row]) {
+            pattern |= (1u << (unsigned)i);
+        }
+    }
+    return pattern;
+}
+
+static void cardinality_guard(const LogDataset *ds)
+{
+    RowGroup groups[32] = {0};
+    size_t group_count = 0;
+
+    for (size_t r = 0; r < ds->row_count; ++r) {
+        uint32_t pat = compute_validity_pattern(ds, r);
+        size_t g = 0;
+        for (; g < group_count; ++g) {
+            if (groups[g].pattern == pat) break;
+        }
+        if (g == group_count) {
+            if (group_count >= 32) break;
+            groups[g].pattern = pat;
+            groups[g].capacity = 8;
+            groups[g].indices = malloc(groups[g].capacity * sizeof(size_t));
+            group_count++;
+        }
+        if (groups[g].count == groups[g].capacity) {
+            groups[g].capacity *= 2;
+            groups[g].indices = realloc(groups[g].indices, groups[g].capacity * sizeof(size_t));
+        }
+        groups[g].indices[groups[g].count++] = r;
+    }
+
+    printf("\n=== Cardinality Guard ===\n");
+    printf("Groups by validity pattern: %zu\n", group_count);
+    for (size_t g = 0; g < group_count; ++g) {
+        printf("  Pattern 0x%04x | rows: %zu | fields: ", groups[g].pattern, groups[g].count);
+        for (size_t f = 0; f < ds->field_count; ++f) {
+            if (groups[g].pattern & (1u << (unsigned)f)) printf("%s ", ds->fields[f].name);
+        }
+        printf("\n");
+    }
+    printf("=========================\n");
+
+    for (size_t g = 0; g < group_count; ++g) {
+        free(groups[g].indices);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Main: mock 5-row sparse collapse scenario.                           */
 /* ------------------------------------------------------------------ */
 
@@ -292,6 +356,7 @@ int main(void)
     ClusteringControl ctrl = evaluate_clustering_strategy(ds);
 
     emit_diagnostics(ds, &ctrl);
+    cardinality_guard(ds);
 
     dataset_free(ds);
     return EXIT_SUCCESS;

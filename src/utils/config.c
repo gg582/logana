@@ -35,6 +35,7 @@ const char *logana_algorithm_name(logana_algorithm_t algorithm) {
         case LOGANA_ALGO_OPTICS: return "optics";
         case LOGANA_ALGO_GMM: return "gmm";
         case LOGANA_ALGO_AGGLOMERATIVE: return "agglomerative";
+        case LOGANA_ALGO_AUTO: return "auto";
     }
     return "dbscan";
 }
@@ -48,6 +49,7 @@ logana_algorithm_t logana_parse_algorithm(const char *name) {
     if (logana_strieq(name, "optics")) return LOGANA_ALGO_OPTICS;
     if (logana_strieq(name, "gmm")) return LOGANA_ALGO_GMM;
     if (logana_strieq(name, "agglomerative")) return LOGANA_ALGO_AGGLOMERATIVE;
+    if (logana_strieq(name, "auto")) return LOGANA_ALGO_AUTO;
     return LOGANA_ALGO_DBSCAN;
 }
 

@@ -32,7 +32,8 @@ typedef enum {
     LOGANA_ALGO_MEAN_SHIFT,
     LOGANA_ALGO_OPTICS,
     LOGANA_ALGO_GMM,
-    LOGANA_ALGO_AGGLOMERATIVE
+    LOGANA_ALGO_AGGLOMERATIVE,
+    LOGANA_ALGO_AUTO
 } logana_algorithm_t;
 
 typedef enum {
@@ -85,6 +86,7 @@ typedef struct {
     double slope;
     double outlier_ratio;
     size_t cluster_count;
+    double cluster_balance;      /* min/max cluster ratio; 1.0 = perfect balance */
 } logana_analysis_summary_t;
 
 typedef struct {
@@ -94,6 +96,7 @@ typedef struct {
     size_t row_count;
     size_t dimensions;
     int *labels;
+    uint64_t *categories;        /* Per-row category hash for cardinality grouping */
 } logana_feature_matrix_t;
 
 typedef struct logana_job {

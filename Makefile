@@ -19,6 +19,7 @@ CPPFLAGS += $(addprefix -I,$(INCDIRS))
 LDFLAGS  += -pthread -lm -lsqlite3 -lssl -lcrypto -ldl -lstdc++ -lz -lcurl -lnghttp2
 
 SRC      := $(sort $(foreach d,$(SRCDIRS),$(wildcard $(d)/*.c)))
+SRC      := $(filter-out ./sparse_guard.c,$(SRC))
 OBJ      := $(patsubst %.c,obj/%.o,$(SRC))
 DEP      := $(OBJ:.o=.d)
 
@@ -63,8 +64,11 @@ obj/%.o: %.c
 dirs:
 	@mkdir -p obj $(dir $(TARGET))
 
+sparse_guard: sparse_guard.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
 clean:
-	rm -rf obj $(TARGET)
+	rm -rf obj $(TARGET) sparse_guard
 	$(MAKE) -C lib/libttak clean
 
 print-src:
