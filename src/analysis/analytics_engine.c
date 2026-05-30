@@ -449,18 +449,25 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
             bool extracted_valid[LOGANA_MAX_DIMENSIONS] = {false};
             size_t captured = 0;
 
-            /* 1) Extract configured numeric keys with anti-trap guards */
+            /* 1) Extract configured numeric keys with anti-trap guards.
+             *    If a key is missing, explicitly mark as NaN / invalid so the
+             *    scheduler sees a sparse matrix instead of a dense fake one. */
             for (size_t d = 0; d < engine->config.numeric_key_count && captured < dims; ++d) {
                 bool valid = true;
                 double number = 0.0;
-                if (logana_extract_number(cursor, engine->config.numeric_keys[d],
-                                          engine->config.case_sensitive,
-                                          &number, &valid, false)) {
+                int found = logana_extract_number(cursor, engine->config.numeric_keys[d],
+                                                  engine->config.case_sensitive,
+                                                  &number, &valid, false);
+                if (found) {
                     extracted[captured] = number;
                     extracted_valid[captured] = valid;
                     if (!valid) valid_mask[rows * dims + captured] = 0;
-                    ++captured;
+                } else {
+                    extracted[captured] = NAN;
+                    extracted_valid[captured] = false;
+                    valid_mask[rows * dims + captured] = 0;
                 }
+                ++captured;
             }
 
             /* 2) Timestamp extraction & normalization */
@@ -499,8 +506,11 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
                 }
             }
 
-            /* 3) Free-form number fallback */
-            if (captured < dims) {
+            /* 3) Free-form number fallback — ONLY when no numeric keys are configured.
+             *    If the user explicitly configured keys, missing fields must stay
+             *    invalid; pulling stray numbers from other JSON fields destroys
+             *    the validity bitmap and null-rate statistics. */
+            if (engine->config.numeric_key_count == 0 && captured < dims) {
                 double freeform[LOGANA_MAX_DIMENSIONS] = {0};
                 size_t freeform_count = logana_collect_freeform_numbers(cursor, freeform, dims - captured);
                 for (size_t i = 0; i < freeform_count && captured < dims; ++i) {
@@ -527,17 +537,21 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
             }
             categories[rows] = cat_off > 0 ? logana_hash64(cat_buf, cat_off) : 0;
 
-            /* 5) Synthetic fallback so the row is never completely empty */
-            if (captured == 0) {
+            /* 5) Synthetic fallback so the row is never completely empty.
+             *    Only allowed when the user has NOT configured explicit keys. */
+            if (engine->config.numeric_key_count == 0 && captured == 0) {
                 extracted[captured] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
                 extracted_valid[captured] = true;
                 if (captured < dims) { extracted[++captured] = (double)strlen(cursor); extracted_valid[captured] = true; }
                 if (captured < dims) { extracted[++captured] = (double)(logana_count_chars(cursor, '=') + logana_count_chars(cursor, ':')); extracted_valid[captured] = true; }
             }
 
+            /* Pad remaining dimensions with NaN / invalid.  Replicating the
+             * last real value makes the matrix look artificially dense. */
             while (captured < dims) {
-                extracted[captured] = extracted[captured - 1];
-                extracted_valid[captured] = extracted_valid[captured - 1];
+                extracted[captured] = NAN;
+                extracted_valid[captured] = false;
+                valid_mask[rows * dims + captured] = 0;
                 ++captured;
             }
 
@@ -1181,8 +1195,128 @@ static size_t logana_cluster(logana_engine_t *engine, logana_job_t *job,
         case LOGANA_ALGO_OPTICS: return logana_run_optics(job, engine->config.dbscan_eps * 1.2, engine->config.dbscan_min_samples, dist_fn, summary);
         case LOGANA_ALGO_GMM: return logana_run_gmm(job, 3, summary);
         case LOGANA_ALGO_AGGLOMERATIVE: return logana_run_agglomerative(job, 3, dist_fn, summary);
+        case LOGANA_ALGO_FALLBACK_SCATTERPLOT:
+            for (size_t r = 0; r < rows; ++r) job->matrix.labels[r] = -1;
+            return 0;
     }
     return 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Auto-mode algorithm selector with LRU cache
+ * -------------------------------------------------------------------------- */
+
+static uint64_t logana_compute_fingerprint(const logana_job_t *job, size_t rows, size_t active_dims)
+{
+    size_t sample = job->payload_size > 1024 ? 1024 : job->payload_size;
+    uint64_t h = logana_hash64(job->payload, sample);
+    h ^= (uint64_t)rows * 0x9e3779b97f4a7c15ULL;
+    h ^= (uint64_t)active_dims * 0xbf58476d1ce4e5b9ULL;
+    h ^= (uint64_t)job->matrix.dimensions * 0x94d049bb133111ebULL;
+    return h;
+}
+
+static logana_algorithm_t logana_auto_cache_lookup(logana_engine_t *engine, uint64_t fp, uint64_t now_ms)
+{
+    for (size_t i = 0; i < engine->auto_cache_count; ++i) {
+        if (engine->auto_cache[i].fingerprint == fp) {
+            engine->auto_cache[i].last_used_ms = now_ms;
+            return engine->auto_cache[i].selected;
+        }
+    }
+    return LOGANA_ALGO_AUTO; /* sentinel: cache miss */
+}
+
+static void logana_auto_cache_insert(logana_engine_t *engine, uint64_t fp,
+                                     logana_algorithm_t selected, uint64_t now_ms)
+{
+    if (engine->auto_cache_count < LOGANA_MAX_AUTO_CACHE) {
+        engine->auto_cache[engine->auto_cache_count++] =
+            (logana_auto_cache_entry_t){fp, selected, now_ms};
+        return;
+    }
+    /* LRU eviction */
+    size_t evict = 0;
+    uint64_t oldest = engine->auto_cache[0].last_used_ms;
+    for (size_t i = 1; i < engine->auto_cache_count; ++i) {
+        if (engine->auto_cache[i].last_used_ms < oldest) {
+            oldest = engine->auto_cache[i].last_used_ms;
+            evict = i;
+        }
+    }
+    engine->auto_cache[evict] = (logana_auto_cache_entry_t){fp, selected, now_ms};
+}
+
+static logana_algorithm_t logana_select_algorithm_auto(const logana_engine_t *engine,
+                                                       const logana_job_t *job,
+                                                       size_t rows,
+                                                       size_t active_dims,
+                                                       double matrix_density,
+                                                       size_t unique_cat_count)
+{
+    (void)engine;
+
+    /* Stage 0: Hard guardrails */
+    if (rows <= 5 || active_dims == 0) {
+        return LOGANA_ALGO_FALLBACK_SCATTERPLOT;
+    }
+
+    /* Stage 1: Large-scale dense streaming -> BIRCH
+     * BIRCH excels on high-volume data because it builds a CF-tree in a
+     * single pass and avoids O(N^2) distance matrix materialisation. */
+    if (rows > 1000 && matrix_density > 0.5) {
+        return LOGANA_ALGO_BIRCH;
+    }
+
+    /* Stage 2: Noisy data with arbitrary cluster shapes -> DBSCAN
+     * DBSCAN does not assume globular clusters and naturally labels
+     * sparse outliers as noise (-1). */
+    if (job->summary.outlier_ratio > 0.15 && rows > 50) {
+        return LOGANA_ALGO_DBSCAN;
+    }
+
+    /* Stage 3: Hierarchical / categorical structure -> Agglomerative
+     * When the data naturally splits into a small number of categories,
+     * agglomerative clustering preserves the dendrogram semantics. */
+    if (unique_cat_count > 1 && unique_cat_count <= 8 && rows <= 1024) {
+        return LOGANA_ALGO_AGGLOMERATIVE;
+    }
+
+    /* Stage 4: Small, low-dimensional, non-parametric -> Mean-Shift
+     * Mean-Shift requires no prior cluster count and works well when
+     * the sample size is small enough to keep the mode search cheap. */
+    if (rows <= 200 && active_dims <= 3 && matrix_density < 0.7) {
+        return LOGANA_ALGO_MEAN_SHIFT;
+    }
+
+    /* Stage 5: Variable-density clusters -> OPTICS
+     * OPTICS generalises DBSCAN by ordering points according to
+     * reachability; ideal when local densities vary widely. */
+    if (rows > 100 && matrix_density < 0.6) {
+        return LOGANA_ALGO_OPTICS;
+    }
+
+    /* Stage 6: Moderate-size soft clustering -> GMM
+     * Gaussian Mixture Models provide probabilistic assignments and
+     * handle elliptical covariance better than hard K-means. */
+    if (rows <= 500 && active_dims >= 2 && matrix_density > 0.4) {
+        return LOGANA_ALGO_GMM;
+    }
+
+    /* Stage 7: K-means++ territory — ONLY when the data is explicitly
+     * dense, uniform, globular, high-dimensional, and low-noise.
+     * K-means++ remains a dominant active-duty algorithm, but it is a
+     * specialist, not a universal default.  We dispatch it only when
+     * the topology is unambiguously favourable. */
+    if (rows > 100 && active_dims >= 3 && matrix_density > 0.75 && job->summary.outlier_ratio < 0.05) {
+        return LOGANA_ALGO_KMEANS_PP;
+    }
+
+    /* Stage 8: Default — ambiguous or non-globular topology.
+     * DBSCAN is more forgiving than K-means++ on irregular shapes,
+     * mixed densities, and unlabeled noise points common in logs.
+     * This makes the auto-mode default resilient against misuse. */
+    return LOGANA_ALGO_DBSCAN;
 }
 
 int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
@@ -1193,6 +1327,76 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
         return -1;
     }
     logana_compute_summary(job);
+
+    /* ------------------------------------------------------------------
+     * Auto-mode defensive scheduler + smart algorithm selection
+     * ------------------------------------------------------------------ */
+    if (job->algorithm == LOGANA_ALGO_AUTO) {
+        const double SPARSITY_DROP_THRESHOLD = 0.20;
+        size_t active_dims = 0;
+        size_t total_valid = 0;
+        for (size_t d = 0; d < job->matrix.dimensions; ++d) {
+            size_t valid_cnt = 0;
+            for (size_t r = 0; r < rows; ++r) {
+                if (job->matrix.valid_mask[r * job->matrix.dimensions + d]) ++valid_cnt;
+            }
+            total_valid += valid_cnt;
+            double density = (double)valid_cnt / (double)rows;
+            if (density >= SPARSITY_DROP_THRESHOLD) ++active_dims;
+        }
+        double matrix_density = (double)total_valid / (double)(rows * job->matrix.dimensions);
+
+        /* Early exit: insufficient rows or no viable dimensions */
+        if (rows <= 5 || active_dims == 0) {
+            job->algorithm = LOGANA_ALGO_FALLBACK_SCATTERPLOT;
+            job->summary.cluster_count = 0;
+            job->summary.slope = 0.0;
+            job->summary.cluster_balance = 0.0;
+            job->summary.outlier_ratio = 0.0;
+            if (job->matrix.labels) { free(job->matrix.labels); job->matrix.labels = NULL; }
+            job->matrix.labels = calloc(rows, sizeof(int));
+            if (job->matrix.labels) {
+                for (size_t r = 0; r < rows; ++r) job->matrix.labels[r] = -1;
+            }
+            return 0;
+        }
+
+        /* Count unique categories for hierarchical heuristics */
+        size_t unique_cat_count = 0;
+        if (job->matrix.categories) {
+            uint64_t seen[256] = {0};
+            for (size_t r = 0; r < rows && unique_cat_count < 256; ++r) {
+                uint64_t cat = job->matrix.categories[r];
+                bool found = false;
+                for (size_t i = 0; i < unique_cat_count; ++i) {
+                    if (seen[i] == cat) { found = true; break; }
+                }
+                if (!found) seen[unique_cat_count++] = cat;
+            }
+        }
+
+        uint64_t now_ms = logana_now_ms();
+        uint64_t fp = logana_compute_fingerprint(job, rows, active_dims);
+        logana_algorithm_t cached = logana_auto_cache_lookup(engine, fp, now_ms);
+
+        if (cached != LOGANA_ALGO_AUTO) {
+            ttak_logger_log(&engine->logger, TTAK_LOG_DEBUG,
+                            "auto cache hit: fp=%llx -> %s",
+                            (unsigned long long)fp,
+                            logana_algorithm_name(cached));
+            job->algorithm = cached;
+        } else {
+            logana_algorithm_t selected = logana_select_algorithm_auto(
+                engine, job, rows, active_dims, matrix_density, unique_cat_count);
+            job->algorithm = selected;
+            logana_auto_cache_insert(engine, fp, selected, now_ms);
+            ttak_logger_log(&engine->logger, TTAK_LOG_INFO,
+                            "auto selected: rows=%zu active_dims=%zu density=%.3f cats=%zu -> %s",
+                            rows, active_dims, matrix_density, unique_cat_count,
+                            logana_algorithm_name(selected));
+        }
+    }
+
     job->summary.cluster_count = logana_cluster(engine, job, &job->summary);
 
     /* Compute cluster balance (collapse metric) */

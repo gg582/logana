@@ -33,7 +33,8 @@ typedef enum {
     LOGANA_ALGO_OPTICS,
     LOGANA_ALGO_GMM,
     LOGANA_ALGO_AGGLOMERATIVE,
-    LOGANA_ALGO_AUTO
+    LOGANA_ALGO_AUTO,
+    LOGANA_ALGO_FALLBACK_SCATTERPLOT
 } logana_algorithm_t;
 
 typedef enum {
@@ -129,6 +130,14 @@ typedef struct {
     size_t total_bytes;
 } logana_batch_t;
 
+#define LOGANA_MAX_AUTO_CACHE 64
+
+typedef struct {
+    uint64_t fingerprint;          /* payload hash + dimensional signature */
+    logana_algorithm_t selected;
+    uint64_t last_used_ms;
+} logana_auto_cache_entry_t;
+
 typedef struct logana_engine {
     logana_config_t config;
     ttak_logger_t logger;
@@ -143,6 +152,8 @@ typedef struct logana_engine {
     logana_job_t *jobs[LOGANA_MAX_JOBS];
     size_t job_count;
     uint64_t next_job_id;
+    logana_auto_cache_entry_t auto_cache[LOGANA_MAX_AUTO_CACHE];
+    size_t auto_cache_count;
 } logana_engine_t;
 
 typedef struct {

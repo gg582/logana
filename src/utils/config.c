@@ -36,6 +36,7 @@ const char *logana_algorithm_name(logana_algorithm_t algorithm) {
         case LOGANA_ALGO_GMM: return "gmm";
         case LOGANA_ALGO_AGGLOMERATIVE: return "agglomerative";
         case LOGANA_ALGO_AUTO: return "auto";
+        case LOGANA_ALGO_FALLBACK_SCATTERPLOT: return "fallback_scatterplot";
     }
     return "dbscan";
 }
@@ -50,6 +51,7 @@ logana_algorithm_t logana_parse_algorithm(const char *name) {
     if (logana_strieq(name, "gmm")) return LOGANA_ALGO_GMM;
     if (logana_strieq(name, "agglomerative")) return LOGANA_ALGO_AGGLOMERATIVE;
     if (logana_strieq(name, "auto")) return LOGANA_ALGO_AUTO;
+    if (logana_strieq(name, "fallback") || logana_strieq(name, "scatterplot") || logana_strieq(name, "fallback_scatterplot")) return LOGANA_ALGO_FALLBACK_SCATTERPLOT;
     return LOGANA_ALGO_DBSCAN;
 }
 
