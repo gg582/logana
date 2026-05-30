@@ -701,18 +701,67 @@ static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count,
     return mode_count;
 }
 
-static size_t logana_run_kmeans(logana_job_t *job, size_t k, size_t seed_offset,
-                                logana_distance_fn_t dist_fn,
-                                const logana_analysis_summary_t *summary) {
+/* --------------------------------------------------------------------------
+ * Standard K-Means++ : probabilistic D(x)^2 seeding with LCG
+ * -------------------------------------------------------------------------- */
+
+static uint64_t logana_lcg_next(uint64_t *state) {
+    *state = *state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return *state;
+}
+
+static double logana_lcg_double01(uint64_t *state) {
+    /* 53-bit precision uniform in [0, 1) */
+    return (double)(logana_lcg_next(state) >> 11) * (1.0 / (double)(1ULL << 53));
+}
+
+static double logana_kmeans_inertia(logana_job_t *job, size_t k, float *centers,
+                                    logana_distance_fn_t dist_fn,
+                                    const logana_analysis_summary_t *summary) {
     size_t rows = job->matrix.row_count;
     size_t dims = job->matrix.dimensions;
-    if (!rows) return 0;
-    if (k > rows) k = rows;
-    float centers[LOGANA_MAX_DIMENSIONS * 4] = {0};
-    memcpy(centers, job->matrix.values + (seed_offset % rows) * dims, dims * sizeof(float));
+    double inertia = 0.0;
+    for (size_t r = 0; r < rows; ++r) {
+        double nearest = 1e18;
+        for (size_t c = 0; c < k; ++c) {
+            double dist = dist_fn(job->matrix.values + r * dims, centers + c * dims,
+                                  job->matrix.valid_mask + r * dims, NULL, dims, summary);
+            if (dist < nearest) nearest = dist;
+        }
+        inertia += nearest;
+    }
+    return inertia;
+}
+
+static void logana_kmeans_pp_init(logana_job_t *job, size_t k, uint64_t seed,
+                                  float *centers,
+                                  logana_distance_fn_t dist_fn,
+                                  const logana_analysis_summary_t *summary) {
+    size_t rows = job->matrix.row_count;
+    size_t dims = job->matrix.dimensions;
+    if (!rows || !k) return;
+
+    uint64_t rng = seed;
+
+    /* 1. Choose first center uniformly at random */
+    size_t first_idx = (size_t)(logana_lcg_double01(&rng) * (double)rows);
+    if (first_idx >= rows) first_idx = rows - 1;
+    memcpy(centers, job->matrix.values + first_idx * dims, dims * sizeof(float));
+
+    if (k == 1) return;
+
+    double *dists = malloc(rows * sizeof(double));
+    if (!dists) {
+        /* Fallback: deterministic spacing if malloc fails */
+        for (size_t c = 1; c < k; ++c) {
+            size_t idx = (rows * c) / k;
+            memcpy(centers + c * dims, job->matrix.values + idx * dims, dims * sizeof(float));
+        }
+        return;
+    }
+
     for (size_t c = 1; c < k; ++c) {
-        double best_dist = -1.0;
-        size_t best_idx = 0;
+        double dist_sum = 0.0;
         for (size_t r = 0; r < rows; ++r) {
             double nearest = 1e18;
             for (size_t j = 0; j < c; ++j) {
@@ -720,50 +769,121 @@ static size_t logana_run_kmeans(logana_job_t *job, size_t k, size_t seed_offset,
                                       job->matrix.valid_mask + r * dims, NULL, dims, summary);
                 if (dist < nearest) nearest = dist;
             }
-            if (nearest > best_dist) {
-                best_dist = nearest;
-                best_idx = r;
-            }
+            dists[r] = nearest * nearest; /* D(x)^2 */
+            dist_sum += dists[r];
         }
-        memcpy(centers + c * dims, job->matrix.values + best_idx * dims, dims * sizeof(float));
-    }
-    for (size_t iter = 0; iter < 12; ++iter) {
-        double accum[LOGANA_MAX_DIMENSIONS * 4] = {0};
-        size_t counts[4] = {0};
+
+        if (dist_sum <= 0.0) {
+            /* All remaining points coincide with existing centers */
+            for (size_t j = c; j < k; ++j) {
+                memcpy(centers + j * dims, centers, dims * sizeof(float));
+            }
+            break;
+        }
+
+        /* 2. Roulette-wheel selection proportional to D(x)^2 */
+        double pick = logana_lcg_double01(&rng) * dist_sum;
+        double accum = 0.0;
+        size_t chosen = 0;
         for (size_t r = 0; r < rows; ++r) {
-            double best_dist = 1e18;
-            int best = 0;
-            for (size_t c = 0; c < k; ++c) {
-                double dist = dist_fn(job->matrix.values + r * dims, centers + c * dims,
-                                      job->matrix.valid_mask + r * dims, NULL, dims, summary);
-                if (dist < best_dist) {
-                    best_dist = dist;
-                    best = (int)c;
-                }
-            }
-            job->matrix.labels[r] = best;
-            counts[best]++;
-            for (size_t d = 0; d < dims; ++d) {
-                if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
-                accum[best * dims + d] += job->matrix.values[r * dims + d];
+            accum += dists[r];
+            if (accum >= pick) {
+                chosen = r;
+                break;
             }
         }
-        for (size_t c = 0; c < k; ++c) {
-            if (!counts[c]) continue;
-            for (size_t d = 0; d < dims; ++d) {
-                /* Only update dimensions that had valid contributions */
-                if (job->matrix.valid_mask) {
-                    size_t valid_cnt = 0;
-                    for (size_t r = 0; r < rows; ++r) {
-                        if (job->matrix.labels[r] == (int)c && job->matrix.valid_mask[r * dims + d]) valid_cnt++;
+        memcpy(centers + c * dims, job->matrix.values + chosen * dims, dims * sizeof(float));
+    }
+
+    free(dists);
+}
+
+static size_t logana_run_kmeans(logana_job_t *job, size_t k, size_t seed_offset,
+                                logana_distance_fn_t dist_fn,
+                                const logana_analysis_summary_t *summary) {
+    size_t rows = job->matrix.row_count;
+    size_t dims = job->matrix.dimensions;
+    if (!rows) return 0;
+    if (k > rows) k = rows;
+    if (k == 0) k = 1;
+    if (k > 8) k = 8;
+
+    float centers[LOGANA_MAX_DIMENSIONS * 8] = {0};
+    float best_centers[LOGANA_MAX_DIMENSIONS * 8] = {0};
+    int *tmp_labels = malloc(rows * sizeof(int));
+    if (!tmp_labels) return 0;
+
+    /* Standard K-Means++: multiple initialisations, keep best inertia */
+    const size_t n_init = (rows > 1000) ? 3 : 5;
+    double best_inertia = 1e300;
+
+    for (size_t trial = 0; trial < n_init; ++trial) {
+        uint64_t seed = (uint64_t)(seed_offset + trial * 31 + 0x9e3779b9);
+        logana_kmeans_pp_init(job, k, seed, centers, dist_fn, summary);
+
+        /* Lloyd's algorithm */
+        for (size_t iter = 0; iter < 30; ++iter) {
+            double accum[LOGANA_MAX_DIMENSIONS * 8] = {0};
+            size_t counts[8] = {0};
+            for (size_t r = 0; r < rows; ++r) {
+                double best_dist = 1e18;
+                int best = 0;
+                for (size_t c = 0; c < k; ++c) {
+                    double dist = dist_fn(job->matrix.values + r * dims, centers + c * dims,
+                                          job->matrix.valid_mask + r * dims, NULL, dims, summary);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best = (int)c;
                     }
-                    if (valid_cnt) centers[c * dims + d] = (float)(accum[c * dims + d] / (double)valid_cnt);
-                } else {
-                    centers[c * dims + d] = (float)(accum[c * dims + d] / (double)counts[c]);
+                }
+                tmp_labels[r] = best;
+                counts[best]++;
+                for (size_t d = 0; d < dims; ++d) {
+                    if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+                    accum[best * dims + d] += job->matrix.values[r * dims + d];
                 }
             }
+            for (size_t c = 0; c < k; ++c) {
+                if (!counts[c]) continue;
+                for (size_t d = 0; d < dims; ++d) {
+                    if (job->matrix.valid_mask) {
+                        size_t valid_cnt = 0;
+                        for (size_t r = 0; r < rows; ++r) {
+                            if (tmp_labels[r] == (int)c && job->matrix.valid_mask[r * dims + d]) valid_cnt++;
+                        }
+                        if (valid_cnt) centers[c * dims + d] = (float)(accum[c * dims + d] / (double)valid_cnt);
+                    } else {
+                        centers[c * dims + d] = (float)(accum[c * dims + d] / (double)counts[c]);
+                    }
+                }
+            }
+        }
+
+        double inertia = logana_kmeans_inertia(job, k, centers, dist_fn, summary);
+        if (inertia < best_inertia) {
+            best_inertia = inertia;
+            memcpy(best_centers, centers, sizeof(centers));
+            memcpy(job->matrix.labels, tmp_labels, rows * sizeof(int));
         }
     }
+
+    /* Final assignment using the best discovered centroids */
+    memcpy(centers, best_centers, sizeof(best_centers));
+    for (size_t r = 0; r < rows; ++r) {
+        double best_dist = 1e18;
+        int best = 0;
+        for (size_t c = 0; c < k; ++c) {
+            double dist = dist_fn(job->matrix.values + r * dims, centers + c * dims,
+                                  job->matrix.valid_mask + r * dims, NULL, dims, summary);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = (int)c;
+            }
+        }
+        job->matrix.labels[r] = best;
+    }
+
+    free(tmp_labels);
     return k;
 }
 

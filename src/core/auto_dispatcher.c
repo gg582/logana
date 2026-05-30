@@ -4,14 +4,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SPARSITY_DROP_THRESHOLD   0.20
+#define SPARSITY_DROP_THRESHOLD      0.20
 #define MATRIX_DENSITY_LOW_THRESHOLD 0.40
-#define BIRCH_ROW_THRESHOLD       200
+#define BIRCH_ROW_THRESHOLD          200
+#define HIGH_VARIANCE_THRESHOLD      2.5
+
+/* -------------------------------------------------------------------------- */
+/* Algorithm Arsenal                                                          */
+/* -------------------------------------------------------------------------- */
 
 typedef enum {
     ALGO_KMEANS = 0,
     ALGO_DBSCAN,
     ALGO_BIRCH,
+    ALGO_OPTICS,
+    ALGO_MEAN_SHIFT,
+    ALGO_GMM,
+    ALGO_AGGLOMERATIVE,
     ALGO_FALLBACK_SCATTERPLOT
 } AlgorithmType;
 
@@ -129,7 +138,9 @@ AlgorithmType evaluate_and_select_algorithm(const LogDataset *dataset, bool is_a
         return ALGO_FALLBACK_SCATTERPLOT;
     }
 
-    /* Explicit selection is gated upstream by execute_log_workbench_analysis. */
+    /* Explicit user preference is respected upstream; this evaluator is
+       strictly for AUTO mode where we must avoid K-Means++ on
+       irregular / sparse / high-outlier data. */
     if (!is_auto_mode) {
         return ALGO_KMEANS;
     }
@@ -138,26 +149,55 @@ AlgorithmType evaluate_and_select_algorithm(const LogDataset *dataset, bool is_a
     const size_t cols = dataset->col_count;
 
     size_t active_dimensions = 0;
-    size_t total_valid = 0;
+    size_t total_valid       = 0;
+    size_t sparse_count      = 0;
+    double total_std_dev     = 0.0;
+
     for (size_t c = 0; c < cols; c++) {
         if (!dataset->fields[c].is_sparse_dropped) {
             active_dimensions++;
         }
         total_valid += dataset->fields[c].valid_count;
+        if (dataset->fields[c].is_sparse_dropped) {
+            sparse_count++;
+        }
+        total_std_dev += dataset->fields[c].std_dev;
     }
 
-    /* Rule A: Collapse trigger. Mandatory bypass of K-means++ when topology
-       lacks sufficient dimensions or observations to form stable centroids. */
+    /* Rule A: Collapse trigger.  Not enough observations or dimensions
+       to form stable centroids at all. */
     if (active_dimensions == 0 || rows <= 5) {
         return ALGO_FALLBACK_SCATTERPLOT;
     }
 
     const double matrix_density = (double)total_valid / (double)(rows * cols);
-    const bool mixed_schemas = (active_dimensions > 0) && (active_dimensions < cols);
+    const bool   mixed_schemas  = (active_dimensions > 0) && (active_dimensions < cols);
+    const double avg_std_dev    = (active_dimensions > 0)
+                                  ? (total_std_dev / (double)active_dimensions)
+                                  : 0.0;
 
-    /* Rule B: Sparsity trigger. Low matrix density or mixed dynamic schemas
-       imply non-spherical, non-globular clusters unsuitable for K-means++. */
+    /* Rule B: Tiny datasets.  Hierarchical (agglomerative) is the most
+       robust when there are too few points for statistical stability. */
+    if (rows <= 30) {
+        return ALGO_AGGLOMERATIVE;
+    }
+
+    /* Rule C: Sparsity / mixed-schema trigger.
+       Non-globular, non-spherical topology => K-Means++ is a trap.
+       Route to density-aware or streaming alternatives. */
     if (matrix_density < MATRIX_DENSITY_LOW_THRESHOLD || mixed_schemas) {
+        if (rows > BIRCH_ROW_THRESHOLD) {
+            return ALGO_BIRCH;        /* streaming, memory-efficient */
+        } else if (rows > 50) {
+            return ALGO_OPTICS;       /* varying density, no K assumption */
+        } else {
+            return ALGO_DBSCAN;       /* simple density-based fallback */
+        }
+    }
+
+    /* Rule D: Curse of dimensionality relative to sample size.
+       K-Means++ centroids become unstable when N << D*10. */
+    if (rows < active_dimensions * 10) {
         if (rows > BIRCH_ROW_THRESHOLD) {
             return ALGO_BIRCH;
         } else {
@@ -165,8 +205,34 @@ AlgorithmType evaluate_and_select_algorithm(const LogDataset *dataset, bool is_a
         }
     }
 
-    /* Rule C: Optimal K-means. Dense, uniform, high-population fields. */
-    return ALGO_KMEANS;
+    /* Rule E: High variance / irregular spread implies non-spherical shapes.
+       Prefer model-based (GMM) or mode-seeking (Mean Shift) over K-Means++. */
+    if (avg_std_dev > HIGH_VARIANCE_THRESHOLD) {
+        if (rows > 300) {
+            return ALGO_MEAN_SHIFT;
+        } else {
+            return ALGO_GMM;
+        }
+    }
+
+    /* Rule F: Large, dense, uniform, low-variance data — the *only* case
+       where K-Means++ spherical assumption is genuinely justified. */
+    if (rows > BIRCH_ROW_THRESHOLD &&
+        matrix_density > 0.85 &&
+        !mixed_schemas &&
+        avg_std_dev <= 1.0) {
+        return ALGO_KMEANS;
+    }
+
+    /* Rule G: General-purpose default for moderate, reasonably dense data.
+       OPTICS discovers clusters without assuming globularity or fixed K. */
+    if (rows > 100) {
+        return ALGO_OPTICS;
+    }
+
+    /* Rule H: Small-to-moderate dense data where DBSCAN eps can be tuned
+       more reliably than guessing K. */
+    return ALGO_DBSCAN;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -210,6 +276,22 @@ AnalyticsResult execute_log_workbench_analysis(LogDataset *dataset,
             result.status  = STATUS_OK;
             result.message = "BIRCH selected and executed";
             break;
+        case ALGO_OPTICS:
+            result.status  = STATUS_OK;
+            result.message = "OPTICS selected and executed";
+            break;
+        case ALGO_MEAN_SHIFT:
+            result.status  = STATUS_OK;
+            result.message = "Mean-Shift selected and executed";
+            break;
+        case ALGO_GMM:
+            result.status  = STATUS_OK;
+            result.message = "GMM selected and executed";
+            break;
+        case ALGO_AGGLOMERATIVE:
+            result.status  = STATUS_OK;
+            result.message = "Agglomerative selected and executed";
+            break;
         case ALGO_FALLBACK_SCATTERPLOT:
             result.status  = STATUS_FALLBACK;
             result.message = "Scatterplot fallback activated";
@@ -222,5 +304,3 @@ AnalyticsResult execute_log_workbench_analysis(LogDataset *dataset,
 
     return result;
 }
-
-
