@@ -621,36 +621,4 @@ static void destroy_dataset(LogDataset *ds)
     free(ds);
 }
 
-int main(void)
-{
-    LogDataset *dataset = create_mock_dataset();
-    if (!dataset) {
-        return EXIT_FAILURE;
-    }
 
-    AnalyticsResult result = execute_log_pipeline(dataset, true);
-
-    printf("=== Log Pipeline Analytics Result ===\n");
-    printf("Total Rows:           %zu\n", result.total_rows);
-    printf("Active Dimensions:    %zu\n", result.active_dimensions);
-    printf("Effective Dimensions: %zu\n", result.effective_dimensions);
-    printf("Target K:             %zu\n", result.target_k);
-    printf("Fallback Scatter:     %s\n", result.fallback_to_scatterplot ? "true" : "false");
-    printf("Trend Bypassed:       %s\n", result.trend_bypassed ? "true" : "false");
-    printf("Chosen Algorithm:     %d\n", (int)result.chosen_algo);
-    printf("Trend Slope:          %f\n", result.trend_slope);
-    printf("Data Quality Index:   %f\n", result.data_quality_index);
-    printf("Cluster Viability:    %f\n", result.cluster_viability);
-    printf("Adaptive Epsilon:     %f\n", result.adaptive_epsilon);
-    printf("Abort Reason:         %s\n", result.abort_reason ? result.abort_reason : "N/A");
-    printf("\n=== Column Density Inspector ===\n");
-    for (size_t i = 0; i < dataset->num_fields; ++i) {
-        printf("Field %-12s  density=%.2f  dropped=%s\n",
-               dataset->field_names[i],
-               dataset->column_density[i],
-               dataset->is_sparse_dropped[i] ? "true" : "false");
-    }
-
-    destroy_dataset(dataset);
-    return EXIT_SUCCESS;
-}
