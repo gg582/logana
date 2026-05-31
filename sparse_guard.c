@@ -5,359 +5,349 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FIELD_NAME_MAX 64
-#define SPARSITY_THRESHOLD 0.20
-#define MIN_ROWS_FOR_CLUSTERING 5
+#define NUM_ROWS 100
+#define NUM_CLUSTERS 3
 
-/* Per-field telemetry accumulator. Tracks raw observations,
- * nullability bitmap, derived moments, and exclusion state. */
-typedef struct FieldMetric {
-    char name[FIELD_NAME_MAX];
-    double *values;
-    bool *valid;
-    size_t capacity;
-    size_t row_count;
-    double mean;
-    double std_dev;
-    bool is_sparse_dropped;
-} FieldMetric;
+typedef struct {
+    char   timestamp[32];
+    char   service[32];
+    double latency_ms;
+    double cpu_util;
+    double mem_rss_mb;
+    bool   valid;
+    int    cluster_id;
+} LogEntry;
 
-/* Dataset container. Owns field descriptors and global
- * clustering control flags. */
-typedef struct LogDataset {
-    FieldMetric *fields;
-    size_t field_count;
-    size_t row_count;
-} LogDataset;
+static const char *RAW_LINES[NUM_ROWS] = {
+    "{\"timestamp\":\"2026-05-31T18:00:01.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":20.0,\"http_status\":200,\"active_users\":1400,\"cpu_util\":40.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:02.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":110.3,\"http_status\":200,\"active_users\":451,\"cpu_util\":30.1,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:03.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.1,\"http_status\":200,\"active_users\":8820,\"cpu_util\":15.1,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:04.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":21.5,\"http_status\":200,\"active_users\":1406,\"cpu_util\":40.6,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:05.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":111.2,\"http_status\":200,\"active_users\":450,\"cpu_util\":30.4,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:06.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.25,\"http_status\":200,\"active_users\":8850,\"cpu_util\":15.25,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:07.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":23.0,\"http_status\":200,\"active_users\":1412,\"cpu_util\":41.2,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:08.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":112.1,\"http_status\":200,\"active_users\":452,\"cpu_util\":30.7,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:09.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.4,\"http_status\":200,\"active_users\":8880,\"cpu_util\":15.4,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:10.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":24.5,\"http_status\":200,\"active_users\":1418,\"cpu_util\":41.8,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:11.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":113.0,\"http_status\":200,\"active_users\":451,\"cpu_util\":31.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:12.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.55,\"http_status\":200,\"active_users\":8910,\"cpu_util\":15.55,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:13.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":26.0,\"http_status\":200,\"active_users\":1424,\"cpu_util\":42.4,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:14.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":113.9,\"http_status\":200,\"active_users\":453,\"cpu_util\":31.3,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:15.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.7,\"http_status\":200,\"active_users\":8940,\"cpu_util\":15.7,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:16.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":27.5,\"http_status\":200,\"active_users\":1430,\"cpu_util\":43.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:17.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":114.8,\"http_status\":200,\"active_users\":452,\"cpu_util\":31.6,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:18.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":4.85,\"http_status\":200,\"active_users\":8970,\"cpu_util\":15.85,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:19.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":29.0,\"http_status\":200,\"active_users\":1436,\"cpu_util\":43.6,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:20.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.7,\"http_status\":200,\"active_users\":454,\"cpu_util\":31.9,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:21.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":30.0,\"http_status\":200,\"active_users\":1500,\"cpu_util\":45.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:22.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":125.0,\"http_status\":200,\"active_users\":1650,\"cpu_util\":49.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:23.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":220.0,\"http_status\":200,\"active_users\":1800,\"cpu_util\":54.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:24.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":315.0,\"http_status\":200,\"active_users\":1950,\"cpu_util\":58.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:25.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":410.0,\"http_status\":200,\"active_users\":2100,\"cpu_util\":63.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:26.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":505.0,\"http_status\":200,\"active_users\":2250,\"cpu_util\":67.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:27.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":600.0,\"http_status\":200,\"active_users\":2400,\"cpu_util\":72.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:28.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":695.0,\"http_status\":200,\"active_users\":2550,\"cpu_util\":76.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:29.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":790.0,\"http_status\":200,\"active_users\":2700,\"cpu_util\":81.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:30.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":885.0,\"http_status\":200,\"active_users\":2850,\"cpu_util\":85.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:31.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":980.0,\"http_status\":200,\"active_users\":3000,\"cpu_util\":90.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:32.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":1075.0,\"http_status\":200,\"active_users\":3150,\"cpu_util\":94.5,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:33.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":1170.0,\"http_status\":200,\"active_users\":3300,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:34.000Z\",\"level\":\"WARN\",\"service\":\"auth-api\",\"latency_ms\":1265.0,\"http_status\":200,\"active_users\":3450,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:35.000Z\",\"level\":\"ERROR\",\"service\":\"auth-api\",\"latency_ms\":1360.0,\"http_status\":500,\"active_users\":3600,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:36.000Z\",\"level\":\"ERROR\",\"service\":\"auth-api\",\"latency_ms\":1455.0,\"http_status\":500,\"active_users\":3750,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:37.000Z\",\"level\":\"ERROR\",\"service\":\"auth-api\",\"latency_ms\":1550.0,\"http_status\":500,\"active_users\":3900,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:38.000Z\",\"level\":\"ERROR\",\"service\":\"auth-api\",\"latency_ms\":1645.0,\"http_status\":500,\"active_users\":4050,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:39.000Z\",\"level\":\"ERROR\",\"service\":\"auth-api\",\"latency_ms\":1740.0,\"http_status\":500,\"active_users\":4200,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:40.000Z\",\"level\":\"FATAL\",\"service\":\"auth-api\",\"latency_ms\":1835.0,\"http_status\":500,\"active_users\":4350,\"cpu_util\":99.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:41.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":120.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":32.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:42.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":122.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":32.5,\"mem_rss_mb\":1069.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:43.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":124.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":33.0,\"mem_rss_mb\":1114.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:44.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":126.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":33.5,\"mem_rss_mb\":1159.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:45.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":128.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":34.0,\"mem_rss_mb\":1204.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:46.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":130.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":34.5,\"mem_rss_mb\":1249.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:47.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":132.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":35.0,\"mem_rss_mb\":1294.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:48.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":134.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":35.5,\"mem_rss_mb\":1339.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:49.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":136.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":36.0,\"mem_rss_mb\":1384.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:50.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":138.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":36.5,\"mem_rss_mb\":1429.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:51.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":140.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":37.0,\"mem_rss_mb\":1474.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:52.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":142.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":37.5,\"mem_rss_mb\":1519.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:53.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":144.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":38.0,\"mem_rss_mb\":1564.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:54.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":146.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":38.5,\"mem_rss_mb\":1609.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:55.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":148.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":39.0,\"mem_rss_mb\":1654.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:56.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":150.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":39.5,\"mem_rss_mb\":1699.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:57.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":152.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":40.0,\"mem_rss_mb\":1744.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:58.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":154.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":40.5,\"mem_rss_mb\":1789.0}",
+    "{\"timestamp\":\"2026-05-31T18:00:59.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":156.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":41.0,\"mem_rss_mb\":1834.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:00.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":158.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":41.5,\"mem_rss_mb\":1879.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:01.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":160.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":42.0,\"mem_rss_mb\":1924.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:02.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":162.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":42.5,\"mem_rss_mb\":1969.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:03.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":164.0,\"http_status\":200,\"active_users\":461,\"cpu_util\":43.0,\"mem_rss_mb\":2014.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:04.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":166.0,\"http_status\":200,\"active_users\":462,\"cpu_util\":43.5,\"mem_rss_mb\":2059.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:05.000Z\",\"level\":\"WARN\",\"service\":\"payment-v2\",\"latency_ms\":168.0,\"http_status\":200,\"active_users\":460,\"cpu_util\":44.0,\"mem_rss_mb\":2104.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:06.000Z\",\"level\":\"ERROR\",\"service\":\"payment-v2\",\"latency_ms\":0.0,\"http_status\":503,\"active_users\":0,\"cpu_util\":2.0,\"mem_rss_mb\":2149.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:07.000Z\",\"level\":\"ERROR\",\"service\":\"payment-v2\",\"latency_ms\":0.0,\"http_status\":503,\"active_users\":0,\"cpu_util\":2.0,\"mem_rss_mb\":2194.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:08.000Z\",\"level\":\"ERROR\",\"service\":\"payment-v2\",\"latency_ms\":0.0,\"http_status\":503,\"active_users\":0,\"cpu_util\":2.0,\"mem_rss_mb\":2239.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:09.000Z\",\"level\":\"ERROR\",\"service\":\"payment-v2\",\"latency_ms\":0.0,\"http_status\":503,\"active_users\":0,\"cpu_util\":2.0,\"mem_rss_mb\":2284.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:10.000Z\",\"level\":\"ERROR\",\"service\":\"payment-v2\",\"latency_ms\":0.0,\"http_status\":503,\"active_users\":0,\"cpu_util\":2.0,\"mem_rss_mb\":2329.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:11.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":5.0,\"http_status\":200,\"active_users\":9000,\"cpu_util\":20.0,\"mem_rss_mb\":128.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:12.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":10.0,\"http_status\":200,\"active_users\":9400,\"cpu_util\":24.5,\"mem_rss_mb\":129.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:13.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":15.0,\"http_status\":200,\"active_users\":9800,\"cpu_util\":29.0,\"mem_rss_mb\":130.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:14.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":20.0,\"http_status\":200,\"active_users\":10200,\"cpu_util\":33.5,\"mem_rss_mb\":131.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:15.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":10600,\"cpu_util\":38.0,\"mem_rss_mb\":132.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:16.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":30.0,\"http_status\":200,\"active_users\":11000,\"cpu_util\":42.5,\"mem_rss_mb\":133.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:17.000Z\",\"level\":\"INFO\",\"service\":\"mesh-router\",\"latency_ms\":35.0,\"http_status\":200,\"active_users\":11400,\"cpu_util\":47.0,\"mem_rss_mb\":134.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:18.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":40.0,\"http_status\":200,\"active_users\":11800,\"cpu_util\":51.5,\"mem_rss_mb\":135.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:19.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":45.0,\"http_status\":200,\"active_users\":12200,\"cpu_util\":56.0,\"mem_rss_mb\":136.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:20.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":50.0,\"http_status\":200,\"active_users\":12600,\"cpu_util\":60.5,\"mem_rss_mb\":137.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:21.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":55.0,\"http_status\":200,\"active_users\":13000,\"cpu_util\":65.0,\"mem_rss_mb\":138.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:22.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":60.0,\"http_status\":200,\"active_users\":13400,\"cpu_util\":69.5,\"mem_rss_mb\":139.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:23.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":65.0,\"http_status\":200,\"active_users\":13800,\"cpu_util\":74.0,\"mem_rss_mb\":140.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:24.000Z\",\"level\":\"WARN\",\"service\":\"mesh-router\",\"latency_ms\":70.0,\"http_status\":200,\"active_users\":14200,\"cpu_util\":78.5,\"mem_rss_mb\":141.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:25.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":83.0,\"mem_rss_mb\":142.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:26.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":87.5,\"mem_rss_mb\":143.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:27.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":92.0,\"mem_rss_mb\":144.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:28.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":96.5,\"mem_rss_mb\":145.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:29.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":99.0,\"mem_rss_mb\":146.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:30.000Z\",\"level\":\"FATAL\",\"service\":\"mesh-router\",\"latency_ms\":0.0,\"http_status\":504,\"active_users\":0,\"cpu_util\":99.0,\"mem_rss_mb\":147.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:31.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":1200,\"cpu_util\":35.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:32.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.0,\"http_status\":200,\"active_users\":400,\"cpu_util\":25.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:33.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":1200,\"cpu_util\":35.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:34.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.0,\"http_status\":200,\"active_users\":400,\"cpu_util\":25.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:35.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":1200,\"cpu_util\":35.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:36.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.0,\"http_status\":200,\"active_users\":400,\"cpu_util\":25.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:37.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":1200,\"cpu_util\":35.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:38.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.0,\"http_status\":200,\"active_users\":400,\"cpu_util\":25.0,\"mem_rss_mb\":1024.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:39.000Z\",\"level\":\"INFO\",\"service\":\"auth-api\",\"latency_ms\":25.0,\"http_status\":200,\"active_users\":1200,\"cpu_util\":35.0,\"mem_rss_mb\":512.0}",
+    "{\"timestamp\":\"2026-05-31T18:01:40.000Z\",\"level\":\"INFO\",\"service\":\"payment-v2\",\"latency_ms\":115.0,\"http_status\":200,\"active_users\":400,\"cpu_util\":25.0,\"mem_rss_mb\":1024.0}"
+};
 
-/* ------------------------------------------------------------------ */
-/* Construction / destruction                                           */
-/* ------------------------------------------------------------------ */
-
-static LogDataset* dataset_alloc(size_t field_count, size_t row_capacity)
+/* --------------------------------------------------------------------------
+ * ISO 8601 parser
+ * -------------------------------------------------------------------------- */
+double parse_iso8601_to_seconds(const char *timestamp_str)
 {
-    LogDataset *ds = calloc(1, sizeof(LogDataset));
-    if (!ds) return NULL;
+    if (!timestamp_str || timestamp_str[0] == '\0')
+        return 0.0;
 
-    ds->fields = calloc(field_count, sizeof(FieldMetric));
-    if (!ds->fields) {
-        free(ds);
-        return NULL;
-    }
-    ds->field_count = field_count;
+    const char *s = timestamp_str;
+    size_t len = strlen(s);
+    if (len < 19)
+        return 0.0;
 
-    for (size_t i = 0; i < field_count; ++i) {
-        FieldMetric *f = &ds->fields[i];
-        f->values = calloc(row_capacity, sizeof(double));
-        f->valid  = calloc(row_capacity, sizeof(bool));
-        f->capacity = row_capacity;
-        if (!f->values || !f->valid) {
-            /* Simplified error path: caller must free partially built ds. */
-            return ds;
-        }
-    }
-    return ds;
-}
+    int year   = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
+    int month  = (s[5] - '0') * 10 + (s[6] - '0');
+    int day    = (s[8] - '0') * 10 + (s[9] - '0');
+    int hour   = (s[11] - '0') * 10 + (s[12] - '0');
+    int minute = (s[14] - '0') * 10 + (s[15] - '0');
+    int second = (s[17] - '0') * 10 + (s[18] - '0');
 
-static void dataset_free(LogDataset *ds)
-{
-    if (!ds) return;
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        free(ds->fields[i].values);
-        free(ds->fields[i].valid);
-    }
-    free(ds->fields);
-    free(ds);
-}
+    if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':')
+        return 0.0;
 
-/* ------------------------------------------------------------------ */
-/* Ingestion helpers                                                    */
-/* ------------------------------------------------------------------ */
-
-static void dataset_push_row(LogDataset *ds)
-{
-    ds->row_count++;
-}
-
-static void field_push(FieldMetric *f, size_t row_idx, double value, bool is_valid)
-{
-    if (row_idx >= f->capacity) return;
-    f->values[row_idx] = value;
-    f->valid[row_idx] = is_valid;
-    if (row_idx >= f->row_count) f->row_count = row_idx + 1;
-}
-
-/* ------------------------------------------------------------------ */
-/* 1. Sparsity filter: mark fields below density threshold.             */
-/* ------------------------------------------------------------------ */
-
-static void filter_sparse_fields(LogDataset *ds, double threshold)
-{
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        FieldMetric *f = &ds->fields[i];
-        size_t present = 0;
-        size_t eval_rows = ds->row_count < f->row_count ? ds->row_count : f->row_count;
-
-        for (size_t r = 0; r < eval_rows; ++r) {
-            if (f->valid[r]) present++;
-        }
-
-        double density = (eval_rows > 0) ? ((double)present / (double)eval_rows) : 0.0;
-        /* Hard cutoff: at or below threshold is treated as too sparse
-         * to contribute to geometric distance. */
-        if (density <= threshold) {
-            f->is_sparse_dropped = true;
-        } else {
-            f->is_sparse_dropped = false;
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* 2. Statistical profiler: mean/std_dev with n-1 guard.                */
-/* ------------------------------------------------------------------ */
-
-static void compute_field_statistics(FieldMetric *f)
-{
-    size_t valid_count = 0;
-    double sum = 0.0;
-
-    size_t eval_rows = f->row_count;
-    for (size_t r = 0; r < eval_rows; ++r) {
-        if (f->valid[r]) {
-            sum += f->values[r];
-            valid_count++;
-        }
+    int ms = 0;
+    if (len >= 23 && s[19] == '.') {
+        ms = (s[20] - '0') * 100 + (s[21] - '0') * 10 + (s[22] - '0');
     }
 
-    f->mean = (valid_count > 0) ? (sum / (double)valid_count) : 0.0;
-
-    /* Guard: std_dev requires n-1 > 0. Bypass if insufficient samples. */
-    if (valid_count <= 1) {
-        f->std_dev = 0.0;
-        return;
+    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 ||
+        second < 0 || second > 59 || ms < 0 || ms > 999) {
+        return 0.0;
     }
 
-    double sq_err_sum = 0.0;
-    for (size_t r = 0; r < eval_rows; ++r) {
-        if (f->valid[r]) {
-            double delta = f->values[r] - f->mean;
-            sq_err_sum += delta * delta;
-        }
-    }
-
-    f->std_dev = sqrt(sq_err_sum / (double)(valid_count - 1));
-}
-
-static void profile_dataset(LogDataset *ds)
-{
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        if (!ds->fields[i].is_sparse_dropped) {
-            compute_field_statistics(&ds->fields[i]);
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* 3. Adaptive clustering strategy controller.                          */
-/* ------------------------------------------------------------------ */
-
-typedef struct ClusteringControl {
-    size_t target_k;
-    bool fallback_to_scatterplot;
-    size_t active_dimensions;
-} ClusteringControl;
-
-static ClusteringControl evaluate_clustering_strategy(const LogDataset *ds)
-{
-    ClusteringControl ctrl = {
-        .target_k = 2,
-        .fallback_to_scatterplot = false,
-        .active_dimensions = 0
+    static const int days_before_month[12] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
     };
 
-    /* Count dimensions that survived sparsity filtering. */
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        if (!ds->fields[i].is_sparse_dropped) {
-            ctrl.active_dimensions++;
-        }
-    }
+    int64_t y = (int64_t)year - 1;
+    int64_t days = y * 365 + y / 4 - y / 100 + y / 400;
+    days += days_before_month[month - 1];
+    if (month > 2 && ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)))
+        days++;
+    days += day - 1;
+    days -= 719162;
 
-    /* Structural collapse guards:
-     * - Zero geometry: no features to cluster.
-     * - Under-populated stream: K-means degenerates when K >= N. */
-    if (ctrl.active_dimensions == 0 || ds->row_count <= MIN_ROWS_FOR_CLUSTERING) {
-        ctrl.target_k = 1;
-        ctrl.fallback_to_scatterplot = true;
-    }
-
-    return ctrl;
+    double seconds = (double)days * 86400.0;
+    seconds += hour * 3600.0;
+    seconds += minute * 60.0;
+    seconds += second;
+    seconds += ms / 1000.0;
+    return seconds;
 }
 
-/* ------------------------------------------------------------------ */
-/* Diagnostic emitter                                                   */
-/* ------------------------------------------------------------------ */
-
-static void emit_diagnostics(const LogDataset *ds, const ClusteringControl *ctrl)
+/* --------------------------------------------------------------------------
+ * Shannon entropy aggregator
+ * -------------------------------------------------------------------------- */
+double calculate_cluster_distribution_entropy(const int *cluster_assignments,
+                                              int total_rows,
+                                              int num_clusters)
 {
-    printf("=== Sparse Guard Diagnostics ===\n");
-    printf("Rows ingested: %zu\n", ds->row_count);
-    printf("Active dimensions: %zu\n", ctrl->active_dimensions);
-    printf("Target K: %zu\n", ctrl->target_k);
-    printf("Fallback to scatterplot: %s\n",
-           ctrl->fallback_to_scatterplot ? "true" : "false");
-    printf("\nPer-field summary:\n");
+    if (!cluster_assignments || total_rows <= 0 || num_clusters <= 0)
+        return 0.0;
 
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        const FieldMetric *f = &ds->fields[i];
-        size_t valid_count = 0;
-        for (size_t r = 0; r < f->row_count; ++r) {
-            if (f->valid[r]) valid_count++;
-        }
-        printf("  %-16s | valid: %zu | mean: %8.3f | std: %8.3f | dropped: %s\n",
-               f->name,
-               valid_count,
-               f->mean,
-               f->std_dev,
-               f->is_sparse_dropped ? "yes" : "no");
+    int *counts = calloc((size_t)num_clusters, sizeof(int));
+    if (!counts)
+        return 0.0;
+
+    for (int i = 0; i < total_rows; ++i) {
+        int cid = cluster_assignments[i];
+        if (cid >= 0 && cid < num_clusters)
+            counts[cid]++;
     }
-    printf("================================\n");
+
+    double entropy = 0.0;
+    const double inv_n = 1.0 / (double)total_rows;
+    for (int c = 0; c < num_clusters; ++c) {
+        double p = (double)counts[c] * inv_n;
+        if (p > 1e-9)
+            entropy -= p * log2(p);
+    }
+
+    free(counts);
+    return entropy;
 }
 
-/* ------------------------------------------------------------------ */
-/* 4. Cardinality guard: group rows with identical validity patterns.   */
-/* ------------------------------------------------------------------ */
-
-typedef struct RowGroup {
-    uint32_t pattern;   /* bitmask of valid dimensions */
-    size_t *indices;
-    size_t count;
-    size_t capacity;
-} RowGroup;
-
-static uint32_t compute_validity_pattern(const LogDataset *ds, size_t row)
+/* --------------------------------------------------------------------------
+ * Least-squares linear regression slope calculator
+ * -------------------------------------------------------------------------- */
+static bool least_squares_regression(const double *x, const double *y, size_t n,
+                                     double *out_slope)
 {
-    uint32_t pattern = 0;
-    for (size_t i = 0; i < ds->field_count; ++i) {
-        if (row < ds->fields[i].row_count && ds->fields[i].valid[row]) {
-            pattern |= (1u << (unsigned)i);
-        }
+    double sum_x = 0.0, sum_y = 0.0, sum_xy = 0.0, sum_xx = 0.0;
+    size_t valid_n = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        if (!isfinite(x[i]) || !isfinite(y[i]))
+            continue;
+        sum_x  += x[i];
+        sum_y  += y[i];
+        sum_xy += x[i] * y[i];
+        sum_xx += x[i] * x[i];
+        valid_n++;
     }
-    return pattern;
+
+    if (valid_n < 2) {
+        *out_slope = 0.0;
+        return false;
+    }
+
+    double denom = (double)valid_n * sum_xx - sum_x * sum_x;
+    if (fabs(denom) < 1e-12) {
+        *out_slope = 0.0;
+        return false;
+    }
+
+    *out_slope = ((double)valid_n * sum_xy - sum_x * sum_y) / denom;
+    return true;
 }
 
-static void cardinality_guard(const LogDataset *ds)
+/* --------------------------------------------------------------------------
+ * Minimal JSON field extractor
+ * -------------------------------------------------------------------------- */
+static int service_to_cluster(const char *service)
 {
-    RowGroup groups[32] = {0};
-    size_t group_count = 0;
-
-    for (size_t r = 0; r < ds->row_count; ++r) {
-        uint32_t pat = compute_validity_pattern(ds, r);
-        size_t g = 0;
-        for (; g < group_count; ++g) {
-            if (groups[g].pattern == pat) break;
-        }
-        if (g == group_count) {
-            if (group_count >= 32) break;
-            groups[g].pattern = pat;
-            groups[g].capacity = 8;
-            groups[g].indices = malloc(groups[g].capacity * sizeof(size_t));
-            group_count++;
-        }
-        if (groups[g].count == groups[g].capacity) {
-            groups[g].capacity *= 2;
-            groups[g].indices = realloc(groups[g].indices, groups[g].capacity * sizeof(size_t));
-        }
-        groups[g].indices[groups[g].count++] = r;
-    }
-
-    printf("\n=== Cardinality Guard ===\n");
-    printf("Groups by validity pattern: %zu\n", group_count);
-    for (size_t g = 0; g < group_count; ++g) {
-        printf("  Pattern 0x%04x | rows: %zu | fields: ", groups[g].pattern, groups[g].count);
-        for (size_t f = 0; f < ds->field_count; ++f) {
-            if (groups[g].pattern & (1u << (unsigned)f)) printf("%s ", ds->fields[f].name);
-        }
-        printf("\n");
-    }
-    printf("=========================\n");
-
-    for (size_t g = 0; g < group_count; ++g) {
-        free(groups[g].indices);
-    }
+    if (strcmp(service, "auth-api") == 0)   return 0;
+    if (strcmp(service, "payment-v2") == 0) return 1;
+    if (strcmp(service, "mesh-router") == 0)return 2;
+    return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Main: mock 5-row sparse collapse scenario.                           */
-/* ------------------------------------------------------------------ */
+static bool parse_json_line(const char *line, LogEntry *out)
+{
+    memset(out, 0, sizeof(*out));
 
+    const char *p = strstr(line, "\"timestamp\":\"");
+    if (p) {
+        p += strlen("\"timestamp\":\"");
+        const char *q = strchr(p, '"');
+        if (q) {
+            size_t len = (size_t)(q - p);
+            if (len >= sizeof(out->timestamp)) len = sizeof(out->timestamp) - 1;
+            memcpy(out->timestamp, p, len);
+            out->timestamp[len] = '\0';
+        }
+    }
+
+    p = strstr(line, "\"service\":\"");
+    if (p) {
+        p += strlen("\"service\":\"");
+        const char *q = strchr(p, '"');
+        if (q) {
+            size_t len = (size_t)(q - p);
+            if (len >= sizeof(out->service)) len = sizeof(out->service) - 1;
+            memcpy(out->service, p, len);
+            out->service[len] = '\0';
+        }
+    }
+
+    p = strstr(line, "\"latency_ms\":");
+    if (p) {
+        char *end = NULL;
+        out->latency_ms = strtod(p + strlen("\"latency_ms\":"), &end);
+        if (end == p + strlen("\"latency_ms\":")) out->latency_ms = 0.0;
+    }
+
+    p = strstr(line, "\"cpu_util\":");
+    if (p) {
+        char *end = NULL;
+        out->cpu_util = strtod(p + strlen("\"cpu_util\":"), &end);
+        if (end == p + strlen("\"cpu_util\":")) out->cpu_util = 0.0;
+    }
+
+    p = strstr(line, "\"mem_rss_mb\":");
+    if (p) {
+        char *end = NULL;
+        out->mem_rss_mb = strtod(p + strlen("\"mem_rss_mb\":"), &end);
+        if (end == p + strlen("\"mem_rss_mb\":")) out->mem_rss_mb = 0.0;
+    }
+
+    out->valid = (out->timestamp[0] != '\0');
+    out->cluster_id = service_to_cluster(out->service);
+    return out->valid;
+}
+
+/* --------------------------------------------------------------------------
+ * Main — 100-row stress-test payload
+ * -------------------------------------------------------------------------- */
 int main(void)
 {
-    /* Setup: 5 fields, capacity for 5 rows. */
-    size_t n_fields = 5;
-    size_t n_rows = 5;
-    LogDataset *ds = dataset_alloc(n_fields, n_rows);
-    if (!ds) {
-        return EXIT_FAILURE;
+    LogEntry entries[NUM_ROWS];
+    for (int i = 0; i < NUM_ROWS; ++i) {
+        if (!parse_json_line(RAW_LINES[i], &entries[i])) {
+            fprintf(stderr, "FATAL: parse failure at row %d\n", i);
+            return EXIT_FAILURE;
+        }
     }
 
-    strncpy(ds->fields[0].name, "cpu_temp", FIELD_NAME_MAX);
-    strncpy(ds->fields[1].name, "mem_mbps", FIELD_NAME_MAX);
-    strncpy(ds->fields[2].name, "disk_iops", FIELD_NAME_MAX);
-    strncpy(ds->fields[3].name, "net_pps", FIELD_NAME_MAX);
-    strncpy(ds->fields[4].name, "fan_rpm", FIELD_NAME_MAX);
+    int assignments[NUM_ROWS];
+    for (int i = 0; i < NUM_ROWS; ++i)
+        assignments[i] = entries[i].cluster_id;
 
-    /* Row 0: only cpu_temp present. */
-    dataset_push_row(ds);
-    field_push(&ds->fields[0], 0, 72.5, true);
-    field_push(&ds->fields[1], 0, 0.0, false);
-    field_push(&ds->fields[2], 0, 0.0, false);
-    field_push(&ds->fields[3], 0, 0.0, false);
-    field_push(&ds->fields[4], 0, 0.0, false);
+    double entropy = calculate_cluster_distribution_entropy(
+        assignments, NUM_ROWS, NUM_CLUSTERS);
 
-    /* Row 1: only mem_mbps present. */
-    dataset_push_row(ds);
-    field_push(&ds->fields[0], 1, 0.0, false);
-    field_push(&ds->fields[1], 1, 2048.0, true);
-    field_push(&ds->fields[2], 1, 0.0, false);
-    field_push(&ds->fields[3], 1, 0.0, false);
-    field_push(&ds->fields[4], 1, 0.0, false);
+    double base = parse_iso8601_to_seconds(entries[0].timestamp);
+    double x[NUM_ROWS];
+    double y_mem[NUM_ROWS], y_lat[NUM_ROWS], y_cpu[NUM_ROWS];
+    size_t n = 0;
 
-    /* Row 2: only disk_iops present. */
-    dataset_push_row(ds);
-    field_push(&ds->fields[0], 2, 0.0, false);
-    field_push(&ds->fields[1], 2, 0.0, false);
-    field_push(&ds->fields[2], 2, 150.0, true);
-    field_push(&ds->fields[3], 2, 0.0, false);
-    field_push(&ds->fields[4], 2, 0.0, false);
+    for (int i = 0; i < NUM_ROWS; ++i) {
+        x[i] = parse_iso8601_to_seconds(entries[i].timestamp) - base;
+        y_mem[i] = entries[i].mem_rss_mb;
+        y_lat[i] = entries[i].latency_ms;
+        y_cpu[i] = entries[i].cpu_util;
+        n++;
+    }
 
-    /* Row 3: only net_pps present. */
-    dataset_push_row(ds);
-    field_push(&ds->fields[0], 3, 0.0, false);
-    field_push(&ds->fields[1], 3, 0.0, false);
-    field_push(&ds->fields[2], 3, 0.0, false);
-    field_push(&ds->fields[3], 3, 45000.0, true);
-    field_push(&ds->fields[4], 3, 0.0, false);
+    double slope_mem, slope_lat, slope_cpu;
+    least_squares_regression(x, y_mem, n, &slope_mem);
+    least_squares_regression(x, y_lat, n, &slope_lat);
+    least_squares_regression(x, y_cpu, n, &slope_cpu);
 
-    /* Row 4: only fan_rpm present. */
-    dataset_push_row(ds);
-    field_push(&ds->fields[0], 4, 0.0, false);
-    field_push(&ds->fields[1], 4, 0.0, false);
-    field_push(&ds->fields[2], 4, 0.0, false);
-    field_push(&ds->fields[3], 4, 0.0, false);
-    field_push(&ds->fields[4], 4, 3200.0, true);
+    printf("Cluster Distribution Entropy : %.4f\n", entropy);
+    printf("Trend Slope (mem_rss_mb)     : %.4f\n", slope_mem);
+    printf("Trend Slope (latency_ms)     : %.4f\n", slope_lat);
+    printf("Trend Slope (cpu_util)       : %.4f\n", slope_cpu);
 
-    /* Pipeline execution order:
-     * 1. Sparsity filter isolates single-occurrence fields.
-     * 2. Statistical profiler computes moments only on retained fields.
-     * 3. Clustering controller evaluates geometric viability. */
-    filter_sparse_fields(ds, SPARSITY_THRESHOLD);
-    profile_dataset(ds);
-    ClusteringControl ctrl = evaluate_clustering_strategy(ds);
-
-    emit_diagnostics(ds, &ctrl);
-    cardinality_guard(ds);
-
-    dataset_free(ds);
     return EXIT_SUCCESS;
 }
