@@ -2,5 +2,9 @@ node_modules/
 .next/
 .deps/
 obj/
-bin/logana-engine
+bin/*
+!bin/.gitkeep
+auto_dispatcher_test
 test_analytics
+*.o
+web/tsconfig.tsbuildinfo

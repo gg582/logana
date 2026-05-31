@@ -8,10 +8,14 @@
 #define SCHEMA_DENSITY_THRESHOLD  0.20
 #define MIN_CLUSTERABLE_ROWS      6
 #define MIN_ACTIVE_DIMENSIONS     1
+#define CV_SIGNAL_THRESHOLD       0.05
+#define DQI_MINIMUM               0.15
+#define VIABILITY_MINIMUM         0.10
 #define SPATIAL_DENSITY_HIGH      0.50
 #define UNIFORMITY_HIGH           0.80
 #define SPATIAL_DENSITY_LOW       0.30
 #define UNIFORMITY_LOW            0.50
+#define KNN_K                     3
 
 typedef enum {
     ALGO_NONE = 0,
@@ -43,28 +47,69 @@ typedef struct {
 } LogDataset;
 
 typedef struct {
+    double mean;
+    double stddev;
+    double median;
+    double mad;
+    double cv;
+    double min;
+    double max;
+    size_t valid_count;
+    bool is_active;
+} ColumnStats;
+
+typedef struct {
     size_t target_k;
     bool fallback_to_scatterplot;
     ClusterAlgorithm chosen_algo;
     double trend_slope;
     bool trend_bypassed;
     size_t active_dimensions;
+    size_t effective_dimensions;
     size_t total_rows;
+    double data_quality_index;
+    double cluster_viability;
+    double adaptive_epsilon;
     const char *abort_reason;
 } AnalyticsResult;
 
+static int compare_double(const void *a, const void *b)
+{
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+static double compute_median(double *arr, size_t n)
+{
+    if (n == 0) return NAN;
+    qsort(arr, n, sizeof(double), compare_double);
+    if (n % 2 == 1) {
+        return arr[n / 2];
+    }
+    return (arr[n / 2 - 1] + arr[n / 2]) * 0.5;
+}
+
 static LogDataset* create_mock_dataset(void);
 static void destroy_dataset(LogDataset *ds);
-static size_t run_column_density_inspector(LogDataset *ds);
-static double evaluate_spatial_density(const LogDataset *ds, size_t active_dims);
-static double evaluate_schema_uniformity(const LogDataset *ds, size_t active_dims);
-static double compute_trend_slope(const LogDataset *ds, bool bypass);
+static size_t run_column_density_inspector(LogDataset *ds, ColumnStats *stats);
+static double compute_partial_distance(const LogDataset *ds, size_t i, size_t j, size_t active_dims, const ColumnStats *stats);
+static double evaluate_spatial_density(const LogDataset *ds, size_t active_dims, const ColumnStats *stats);
+static double evaluate_schema_uniformity(const LogDataset *ds, size_t active_dims, const ColumnStats *stats);
+static size_t compute_effective_dimensionality(size_t active_dims, const ColumnStats *stats, size_t num_fields);
+static double compute_data_quality_index(const LogDataset *ds, size_t active_dims, const ColumnStats *stats, double spatial_density, double uniformity);
+static double evaluate_cluster_viability(const LogDataset *ds, size_t active_dims, size_t effective_dims, double dqi);
+static double compute_k_distance_epsilon(const LogDataset *ds, size_t active_dims, const ColumnStats *stats);
+static double compute_trend_slope(const LogDataset *ds, bool bypass, const ColumnStats *stats);
 static AnalyticsResult execute_log_pipeline(LogDataset *dataset, bool is_auto_mode);
 
-/* Stage 1: Dense Schema Parser & Bitmap Validation Layer.
-   Computes per-column presence rates and marks sub-threshold fields
-   as structurally dropped. Active dimension count is returned. */
-static size_t run_column_density_inspector(LogDataset *ds)
+/* Stage 1: Dense Schema Parser & Robust Statistical Validation Layer.
+   Computes per-column density, robust mean, standard deviation, median,
+   median absolute deviation (MAD), and coefficient of variation (CV).
+   Columns below density threshold or with near-zero variance are culled. */
+static size_t run_column_density_inspector(LogDataset *ds, ColumnStats *stats)
 {
     size_t active_dimensions = 0;
 
@@ -76,91 +121,268 @@ static size_t run_column_density_inspector(LogDataset *ds)
             }
         }
         ds->column_density[col] = (double)present_count / (double)ds->num_rows;
-        if (ds->column_density[col] < SCHEMA_DENSITY_THRESHOLD) {
+
+        stats[col].valid_count = present_count;
+        stats[col].is_active = false;
+        stats[col].mean = 0.0;
+        stats[col].stddev = 0.0;
+        stats[col].median = 0.0;
+        stats[col].mad = 0.0;
+        stats[col].cv = 0.0;
+        stats[col].min = NAN;
+        stats[col].max = NAN;
+
+        if (present_count == 0) {
+            ds->is_sparse_dropped[col] = true;
+            continue;
+        }
+
+        double *valid_values = malloc(present_count * sizeof(double));
+        if (!valid_values) {
+            ds->is_sparse_dropped[col] = true;
+            continue;
+        }
+
+        size_t idx = 0;
+        double sum = 0.0;
+        double min_val = INFINITY;
+        double max_val = -INFINITY;
+        for (size_t row = 0; row < ds->num_rows; ++row) {
+            if (ds->rows[row].cells[col].is_valid) {
+                double v = ds->rows[row].cells[col].value;
+                valid_values[idx++] = v;
+                sum += v;
+                if (v < min_val) min_val = v;
+                if (v > max_val) max_val = v;
+            }
+        }
+
+        stats[col].min = min_val;
+        stats[col].max = max_val;
+        stats[col].mean = sum / (double)present_count;
+        stats[col].median = compute_median(valid_values, present_count);
+
+        double mad_sum = 0.0;
+        double var_sum = 0.0;
+        for (size_t i = 0; i < present_count; ++i) {
+            double d = fabs(valid_values[i] - stats[col].median);
+            mad_sum += d;
+            double dv = valid_values[i] - stats[col].mean;
+            var_sum += dv * dv;
+        }
+        stats[col].mad = mad_sum / (double)present_count;
+        stats[col].stddev = sqrt(var_sum / (double)present_count);
+        stats[col].cv = (fabs(stats[col].mean) > DBL_EPSILON) ? (stats[col].stddev / fabs(stats[col].mean)) : 0.0;
+
+        free(valid_values);
+
+        if (ds->column_density[col] < SCHEMA_DENSITY_THRESHOLD || stats[col].cv < CV_SIGNAL_THRESHOLD) {
             ds->is_sparse_dropped[col] = true;
         } else {
             ds->is_sparse_dropped[col] = false;
+            stats[col].is_active = true;
             active_dimensions++;
         }
     }
     return active_dimensions;
 }
 
-/* Pairwise spatial density heuristic. Only fully observed active-dimension
-   vectors contribute to the mean distance accumulator. Returns inverse
-   mean Euclidean distance to keep high-is-dense semantics. */
-static double evaluate_spatial_density(const LogDataset *ds, size_t active_dims)
+/* Missing-data-aware partial Euclidean distance with per-dimension
+   z-score normalization and expansion penalty for absent coordinates.
+   Distance is scaled by sqrt(active_dims / valid_pairs) to prevent
+   short-circuit bias on sparse vectors. */
+static double compute_partial_distance(const LogDataset *ds, size_t i, size_t j, size_t active_dims, const ColumnStats *stats)
 {
-    if (active_dims == 0 || ds->num_rows == 0) {
+    double dist_sq = 0.0;
+    size_t pairwise_valid = 0;
+
+    for (size_t d = 0; d < ds->num_fields; ++d) {
+        if (ds->is_sparse_dropped[d] || !stats[d].is_active) {
+            continue;
+        }
+        bool vi = ds->rows[i].cells[d].is_valid;
+        bool vj = ds->rows[j].cells[d].is_valid;
+        if (vi && vj) {
+            double zi = 0.0;
+            double zj = 0.0;
+            if (stats[d].stddev > DBL_EPSILON) {
+                zi = (ds->rows[i].cells[d].value - stats[d].mean) / stats[d].stddev;
+                zj = (ds->rows[j].cells[d].value - stats[d].mean) / stats[d].stddev;
+            }
+            double delta = zi - zj;
+            dist_sq += delta * delta;
+            pairwise_valid++;
+        }
+    }
+
+    if (pairwise_valid == 0) {
+        return INFINITY;
+    }
+    double scaling = sqrt((double)active_dims / (double)pairwise_valid);
+    return sqrt(dist_sq) * scaling;
+}
+
+/* Spatial density derived from normalized partial distances.
+   Uses the harmonic mean of pairwise distances to reduce outlier
+   sensitivity compared to a raw arithmetic mean. */
+static double evaluate_spatial_density(const LogDataset *ds, size_t active_dims, const ColumnStats *stats)
+{
+    if (active_dims == 0 || ds->num_rows < 2) {
         return 0.0;
     }
 
-    double distance_accumulator = 0.0;
+    double inv_dist_sum = 0.0;
     size_t valid_pairs = 0;
 
     for (size_t i = 0; i < ds->num_rows; ++i) {
         for (size_t j = i + 1; j < ds->num_rows; ++j) {
-            double dist_sq = 0.0;
-            size_t pairwise_valid = 0;
-            for (size_t d = 0; d < ds->num_fields; ++d) {
-                if (ds->is_sparse_dropped[d]) {
-                    continue;
-                }
-                bool vi = ds->rows[i].cells[d].is_valid;
-                bool vj = ds->rows[j].cells[d].is_valid;
-                if (vi && vj) {
-                    double delta = ds->rows[i].cells[d].value - ds->rows[j].cells[d].value;
-                    dist_sq += delta * delta;
-                    pairwise_valid++;
-                }
-            }
-            if (pairwise_valid == active_dims) {
-                distance_accumulator += sqrt(dist_sq);
+            double d = compute_partial_distance(ds, i, j, active_dims, stats);
+            if (isfinite(d) && d > DBL_EPSILON) {
+                inv_dist_sum += 1.0 / d;
                 valid_pairs++;
             }
         }
     }
 
-    if (valid_pairs == 0) {
+    if (valid_pairs == 0 || inv_dist_sum < DBL_EPSILON) {
         return 0.0;
     }
-    double mean_distance = distance_accumulator / (double)valid_pairs;
-    return (mean_distance > 0.0) ? (1.0 / mean_distance) : 0.0;
+    double harmonic_mean = (double)valid_pairs / inv_dist_sum;
+    return harmonic_mean;
 }
 
-/* Schema uniformity derived from standard deviation of column densities.
-   Exponential decay maps low variance to high uniformity near 1.0. */
-static double evaluate_schema_uniformity(const LogDataset *ds, size_t active_dims)
+/* Schema uniformity based on the Gini coefficient of column densities
+   and the coefficient of variation of non-dropped columns.
+   High uniformity approaches 1.0. */
+static double evaluate_schema_uniformity(const LogDataset *ds, size_t active_dims, const ColumnStats *stats)
 {
     if (active_dims == 0) {
         return 0.0;
     }
 
-    double mean_density = 0.0;
+    double *densities = malloc(active_dims * sizeof(double));
+    if (!densities) return 0.0;
+
+    size_t idx = 0;
+    double mean_cv = 0.0;
     for (size_t d = 0; d < ds->num_fields; ++d) {
-        if (!ds->is_sparse_dropped[d]) {
-            mean_density += ds->column_density[d];
+        if (stats[d].is_active) {
+            densities[idx++] = ds->column_density[d];
+            mean_cv += stats[d].cv;
         }
     }
-    mean_density /= (double)active_dims;
+    mean_cv /= (double)active_dims;
 
-    double variance = 0.0;
-    for (size_t d = 0; d < ds->num_fields; ++d) {
-        if (!ds->is_sparse_dropped[d]) {
-            double delta = ds->column_density[d] - mean_density;
-            variance += delta * delta;
+    qsort(densities, active_dims, sizeof(double), compare_double);
+    double gini = 0.0;
+    double sum = 0.0;
+    for (size_t i = 0; i < active_dims; ++i) {
+        sum += densities[i];
+        gini += (2.0 * (double)(i + 1) - (double)active_dims - 1.0) * densities[i];
+    }
+    double gini_coeff = (sum > DBL_EPSILON) ? (gini / ((double)active_dims * sum)) : 0.0;
+    double density_uniformity = 1.0 - gini_coeff;
+
+    free(densities);
+
+    double cv_score = exp(-mean_cv);
+    return 0.6 * density_uniformity + 0.4 * cv_score;
+}
+
+/* Effective dimensionality: count of active columns that exhibit
+   non-degenerate variance after robust standardization. */
+static size_t compute_effective_dimensionality(size_t active_dims, const ColumnStats *stats, size_t num_fields)
+{
+    size_t eff = 0;
+    for (size_t d = 0; d < num_fields; ++d) {
+        if (stats[d].is_active && stats[d].stddev > DBL_EPSILON) {
+            eff++;
         }
     }
-    variance /= (double)active_dims;
+    return (eff > 0) ? eff : active_dims;
+}
 
-    return exp(-sqrt(variance));
+/* Data Quality Index (DQI): composite [0,1] score aggregating
+   fill ratio, signal ratio (CV-based), and spatial separation index.
+   Low DQI blocks fragile clustering attempts. */
+static double compute_data_quality_index(const LogDataset *ds, size_t active_dims, const ColumnStats *stats, double spatial_density, double uniformity)
+{
+    if (active_dims == 0 || ds->num_rows == 0) {
+        return 0.0;
+    }
+
+    double fill_sum = 0.0;
+    size_t signal_count = 0;
+    for (size_t d = 0; d < ds->num_fields; ++d) {
+        if (stats[d].is_active) {
+            fill_sum += ds->column_density[d];
+            if (stats[d].cv >= CV_SIGNAL_THRESHOLD) {
+                signal_count++;
+            }
+        }
+    }
+    double fill_ratio = fill_sum / (double)active_dims;
+    double signal_ratio = (double)signal_count / (double)active_dims;
+    double separation_index = spatial_density * uniformity;
+
+    return 0.35 * fill_ratio + 0.35 * signal_ratio + 0.30 * separation_index;
+}
+
+/* Cluster Viability Score: fuses DQI with the effective sample-to-dimension
+   density ratio. Scores below VIABILITY_MINIMUM trigger mandatory abort
+   to prevent collapse on statistically underpowered matrices. */
+static double evaluate_cluster_viability(const LogDataset *ds, size_t active_dims, size_t effective_dims, double dqi)
+{
+    if (active_dims == 0 || effective_dims == 0 || ds->num_rows == 0) {
+        return 0.0;
+    }
+    double sample_density = (double)ds->num_rows / (double)effective_dims;
+    double density_score = 1.0 - exp(-sample_density / 10.0);
+    return dqi * density_score;
+}
+
+/* k-Distance Profile: computes the KNN_K-th nearest neighbor distance for
+   every row using normalized partial distances, sorts the profile, and
+   returns the 80th percentile as a statistically grounded epsilon for
+   density-based clustering. */
+static double compute_k_distance_epsilon(const LogDataset *ds, size_t active_dims, const ColumnStats *stats)
+{
+    if (ds->num_rows <= KNN_K + 1 || active_dims == 0) {
+        return 0.5;
+    }
+
+    double *k_distances = calloc(ds->num_rows, sizeof(double));
+    if (!k_distances) return 0.5;
+
+    for (size_t i = 0; i < ds->num_rows; ++i) {
+        double *distances = calloc(ds->num_rows - 1, sizeof(double));
+        if (!distances) {
+            free(k_distances);
+            return 0.5;
+        }
+        size_t idx = 0;
+        for (size_t j = 0; j < ds->num_rows; ++j) {
+            if (i == j) continue;
+            double d = compute_partial_distance(ds, i, j, active_dims, stats);
+            distances[idx++] = isfinite(d) ? d : INFINITY;
+        }
+        qsort(distances, idx, sizeof(double), compare_double);
+        k_distances[i] = distances[KNN_K - 1];
+        free(distances);
+    }
+
+    qsort(k_distances, ds->num_rows, sizeof(double), compare_double);
+    size_t p80 = (size_t)floor(0.8 * (double)(ds->num_rows - 1));
+    double epsilon = k_distances[p80];
+    free(k_distances);
+
+    return (epsilon > DBL_EPSILON && isfinite(epsilon)) ? epsilon : 0.5;
 }
 
 /* Stage 3: Domain Isolation for Trend Estimation.
-   Operates exclusively on the first retained dimension to prevent
-   cross-domain metric leakage. Bypass emits NAN to block artifact
-   generation when the pipeline aborts to scatterplot fallback. */
-static double compute_trend_slope(const LogDataset *ds, bool bypass)
+   Linear regression on the first active dimension, row index as the
+   independent variable. Bypass emits NAN to suppress artifacts. */
+static double compute_trend_slope(const LogDataset *ds, bool bypass, const ColumnStats *stats)
 {
     if (bypass) {
         return NAN;
@@ -168,7 +390,7 @@ static double compute_trend_slope(const LogDataset *ds, bool bypass)
 
     size_t target_col = (size_t)-1;
     for (size_t d = 0; d < ds->num_fields; ++d) {
-        if (!ds->is_sparse_dropped[d]) {
+        if (stats[d].is_active) {
             target_col = d;
             break;
         }
@@ -208,9 +430,11 @@ static double compute_trend_slope(const LogDataset *ds, bool bypass)
 }
 
 /* Stage 2: Adaptive Auto-Mode Dispatcher & Heuristic Guardrails.
-   Density and uniformity metrics drive algorithmic routing.
-   Rule A traps undersampled or degenerate matrices before any
-   clustering unit is invoked. */
+   Statistical pre-validation (DQI, viability, effective dimensions)
+   intercepts degenerate inputs before any clustering unit executes.
+   Rule A: viability or dimension collapse.
+   Rule B: sparse / heterogeneous routing to DBSCAN/BIRCH.
+   Rule C: dense / uniform routing to K-means++. */
 static AnalyticsResult execute_log_pipeline(LogDataset *dataset, bool is_auto_mode)
 {
     AnalyticsResult res = {0};
@@ -220,45 +444,79 @@ static AnalyticsResult execute_log_pipeline(LogDataset *dataset, bool is_auto_mo
     res.trend_bypassed = false;
     res.fallback_to_scatterplot = false;
     res.target_k = 0;
+    res.data_quality_index = 0.0;
+    res.cluster_viability = 0.0;
+    res.adaptive_epsilon = 0.5;
     res.abort_reason = NULL;
 
-    size_t active_dims = run_column_density_inspector(dataset);
+    ColumnStats *stats = calloc(dataset->num_fields, sizeof(ColumnStats));
+    if (!stats) {
+        res.fallback_to_scatterplot = true;
+        res.trend_bypassed = true;
+        res.target_k = 1;
+        res.abort_reason = "RULE_A: memory allocation failure for statistics";
+        return res;
+    }
+
+    size_t active_dims = run_column_density_inspector(dataset, stats);
     res.active_dimensions = active_dims;
 
-    /* Rule A (Early Trap): degenerate input envelope. */
-    if (active_dims < MIN_ACTIVE_DIMENSIONS || dataset->num_rows < MIN_CLUSTERABLE_ROWS) {
+    if (active_dims < MIN_ACTIVE_DIMENSIONS) {
+        res.target_k = 1;
+        res.fallback_to_scatterplot = true;
+        res.trend_bypassed = true;
+        res.trend_slope = NAN;
+        res.abort_reason = "RULE_A: zero active dimensions after robust culling";
+        free(stats);
+        return res;
+    }
+
+    double spatial_density = evaluate_spatial_density(dataset, active_dims, stats);
+    double uniformity = evaluate_schema_uniformity(dataset, active_dims, stats);
+    size_t effective_dims = compute_effective_dimensionality(active_dims, stats, dataset->num_fields);
+    res.effective_dimensions = effective_dims;
+
+    double dqi = compute_data_quality_index(dataset, active_dims, stats, spatial_density, uniformity);
+    res.data_quality_index = dqi;
+
+    double viability = evaluate_cluster_viability(dataset, active_dims, effective_dims, dqi);
+    res.cluster_viability = viability;
+
+    res.adaptive_epsilon = compute_k_distance_epsilon(dataset, active_dims, stats);
+
+    /* Augmented Rule A: statistically underpowered or low-quality matrices
+       are trapped regardless of raw row count to prevent variance collapse. */
+    if (dataset->num_rows < MIN_CLUSTERABLE_ROWS || viability < VIABILITY_MINIMUM || dqi < DQI_MINIMUM) {
         res.target_k = 1;
         res.fallback_to_scatterplot = true;
         res.trend_bypassed = true;
         res.trend_slope = NAN;
         if (dataset->num_rows < MIN_CLUSTERABLE_ROWS) {
             res.abort_reason = "RULE_A: row count below clustering threshold";
+        } else if (dqi < DQI_MINIMUM) {
+            res.abort_reason = "RULE_A: data quality index below minimum";
         } else {
-            res.abort_reason = "RULE_A: zero active dimensions after sparsity cull";
+            res.abort_reason = "RULE_A: cluster viability below minimum";
         }
+        free(stats);
         return res;
     }
-
-    double spatial_density = evaluate_spatial_density(dataset, active_dims);
-    double uniformity = evaluate_schema_uniformity(dataset, active_dims);
 
     if (is_auto_mode) {
         bool dense_uniform = (spatial_density > SPATIAL_DENSITY_HIGH) && (uniformity > UNIFORMITY_HIGH);
         bool sparse_heterogeneous = (spatial_density < SPATIAL_DENSITY_LOW) || (uniformity < UNIFORMITY_LOW);
 
         if (dense_uniform) {
-            /* Rule C (Dense Fall-Through): K-means++ viable. */
             res.chosen_algo = ALGO_KMEANS;
-            double raw_k = sqrt((double)dataset->num_rows / 2.0);
+            double raw_k = sqrt((double)dataset->num_rows / (2.0 * (double)effective_dims));
             res.target_k = (raw_k < 2.0) ? 2 : (size_t)raw_k;
         } else if (sparse_heterogeneous) {
-            /* Rule B (Sparsity Bypass): avoid centroid-based distortion. */
-            if (spatial_density < 0.2) {
+            if (spatial_density < 0.2 || effective_dims > dataset->num_rows / 3) {
                 res.chosen_algo = ALGO_DBSCAN;
                 res.target_k = 0;
             } else {
                 res.chosen_algo = ALGO_BIRCH;
-                double raw_k = sqrt((double)dataset->num_rows / 2.0);
+                double raw_k = sqrt((double)dataset->num_rows / (2.0 * (double)effective_dims));
                 res.target_k = (raw_k < 2.0) ? 2 : (size_t)raw_k;
             }
         } else {
@@ -266,18 +524,17 @@ static AnalyticsResult execute_log_pipeline(LogDataset *dataset, bool is_auto_mo
             res.target_k = 2;
         }
     } else {
-        /* Manual override defaults to K-means++ with fixed K. */
         res.chosen_algo = ALGO_KMEANS;
         res.target_k = 3;
     }
 
-    res.trend_slope = compute_trend_slope(dataset, false);
+    res.trend_slope = compute_trend_slope(dataset, false, stats);
+    free(stats);
     return res;
 }
 
-/* Mock 5-row heterogeneous sparse matrix. Fields are deliberately
-   non-overlapping to stress the bitmap validation and density inspector.
-   Row count is set to 5 to guarantee Rule A interception. */
+/* Mock 5-row heterogeneous sparse matrix engineered to trigger
+   Rule A via row-count exhaustion, verifying interceptor logic. */
 static LogDataset* create_mock_dataset(void)
 {
     static char *field_names[] = {
@@ -374,14 +631,18 @@ int main(void)
     AnalyticsResult result = execute_log_pipeline(dataset, true);
 
     printf("=== Log Pipeline Analytics Result ===\n");
-    printf("Total Rows:          %zu\n", result.total_rows);
-    printf("Active Dimensions:   %zu\n", result.active_dimensions);
-    printf("Target K:            %zu\n", result.target_k);
-    printf("Fallback Scatter:    %s\n", result.fallback_to_scatterplot ? "true" : "false");
-    printf("Trend Bypassed:      %s\n", result.trend_bypassed ? "true" : "false");
-    printf("Chosen Algorithm:    %d\n", (int)result.chosen_algo);
-    printf("Trend Slope:         %f\n", result.trend_slope);
-    printf("Abort Reason:        %s\n", result.abort_reason ? result.abort_reason : "N/A");
+    printf("Total Rows:           %zu\n", result.total_rows);
+    printf("Active Dimensions:    %zu\n", result.active_dimensions);
+    printf("Effective Dimensions: %zu\n", result.effective_dimensions);
+    printf("Target K:             %zu\n", result.target_k);
+    printf("Fallback Scatter:     %s\n", result.fallback_to_scatterplot ? "true" : "false");
+    printf("Trend Bypassed:       %s\n", result.trend_bypassed ? "true" : "false");
+    printf("Chosen Algorithm:     %d\n", (int)result.chosen_algo);
+    printf("Trend Slope:          %f\n", result.trend_slope);
+    printf("Data Quality Index:   %f\n", result.data_quality_index);
+    printf("Cluster Viability:    %f\n", result.cluster_viability);
+    printf("Adaptive Epsilon:     %f\n", result.adaptive_epsilon);
+    printf("Abort Reason:         %s\n", result.abort_reason ? result.abort_reason : "N/A");
     printf("\n=== Column Density Inspector ===\n");
     for (size_t i = 0; i < dataset->num_fields; ++i) {
         printf("Field %-12s  density=%.2f  dropped=%s\n",
