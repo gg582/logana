@@ -25,6 +25,7 @@ type Result = {
   entropy?: number;
   trendSlope?: number;
   outlierRatio?: number;
+  schemaDrift?: number;
   svg?: string;
   html?: string;
   error?: string;
@@ -325,6 +326,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   );
   const innerW = cellSize * keys.length;
   const innerH = cellSize * keys.length;
+  const labelFontSize = Math.max(9, Math.min(14, cellSize * 0.22));
+  const valueFontSize = Math.max(9, Math.min(13, cellSize * 0.2));
 
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
@@ -347,13 +350,13 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       const y = top + i * cellSize;
       if (i === j) {
         rects.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="#2a1f1b" rx="6" />`);
-        rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">1</text>`);
+        rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize - 4}" lengthAdjust="spacingAndGlyphs">1</text>`);
         continue;
       }
       const cell = cells.find((c) => (c.x === keys[i] && c.y === keys[j]) || (c.x === keys[j] && c.y === keys[i]));
       const value = cell?.value ?? 0;
       rects.push(`<rect x="${x + 1}" y="${y + 1}" width="${cellSize - 2}" height="${cellSize - 2}" fill="${colorFor(value)}" rx="6" opacity="0.9" />`);
-      rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${value.toFixed(2)}</text>`);
+      rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize - 4}" lengthAdjust="spacingAndGlyphs">${value.toFixed(2)}</text>`);
     }
   }
 
@@ -362,8 +365,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       const x = left + i * cellSize + cellSize / 2;
       const y = top + i * cellSize + cellSize / 2;
       return `
-        <text x="${x}" y="${top - 10}" text-anchor="middle" fill="#b69774" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
-        <text x="${left - 10}" y="${y + 5}" text-anchor="end" fill="#b69774" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
+        <text x="${x}" y="${top - 10}" text-anchor="middle" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize}" lengthAdjust="spacingAndGlyphs">${escapeXml(key)}</text>
+        <text x="${left - 10}" y="${y + 5}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize}" lengthAdjust="spacingAndGlyphs">${escapeXml(key)}</text>
       `;
     })
     .join("");
@@ -771,9 +774,11 @@ function ScatterChart({ scatter }: { scatter: ScatterSeries }) {
 
 function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
   const keys = useMemo(() => Array.from(new Set(cells.flatMap((c) => [c.x, c.y]))).sort(), [cells]);
-  const cellSize = 56;
-  const width = 120 + keys.length * cellSize;
+  const cellSize = Math.max(24, Math.min(56, 640 / Math.max(keys.length, 1)));
+  const width = 100 + keys.length * cellSize;
   const height = 100 + keys.length * cellSize;
+  const labelFontSize = Math.max(9, Math.min(12, cellSize * 0.22));
+  const valueFontSize = Math.max(9, Math.min(11, cellSize * 0.2));
 
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
@@ -793,10 +798,10 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="correlation heatmap">
       {keys.map((key, i) => (
         <g key={`label-${key}`}>
-          <text x={100 + i * cellSize + cellSize / 2} y={90} textAnchor="middle" fill="#b69774" fontSize="12" fontFamily="ui-monospace, monospace">
+          <text x={100 + i * cellSize + cellSize / 2} y={90} textAnchor="middle" fill="#b69774" fontSize={labelFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize} lengthAdjust="spacingAndGlyphs">
             {key}
           </text>
-          <text x={90} y={100 + i * cellSize + cellSize / 2 + 4} textAnchor="end" fill="#b69774" fontSize="12" fontFamily="ui-monospace, monospace">
+          <text x={90} y={100 + i * cellSize + cellSize / 2 + 4} textAnchor="end" fill="#b69774" fontSize={labelFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize} lengthAdjust="spacingAndGlyphs">
             {key}
           </text>
         </g>
@@ -810,7 +815,7 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
           return (
             <g key={`${ki}-${kj}`}>
               <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
-              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize="11" fontFamily="ui-monospace, monospace">
+              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize={valueFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize - 4} lengthAdjust="spacingAndGlyphs">
                 {value.toFixed(2)}
               </text>
             </g>

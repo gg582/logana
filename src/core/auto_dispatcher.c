@@ -122,7 +122,11 @@ void run_defensive_preprocessor(LogDataset *dataset)
                 /* Zero variance: collapse deviations to 0.0 to prevent NaN/Inf. */
                 dataset->data[idx] = 0.0;
             } else {
-                dataset->data[idx] = (v - f->mean) / f->std_dev;
+                double z = (v - f->mean) / f->std_dev;
+                if (!isfinite(z)) z = 0.0;
+                if (z > 10.0) z = 10.0;
+                if (z < -10.0) z = -10.0;
+                dataset->data[idx] = z;
             }
         }
     }
@@ -166,8 +170,15 @@ AlgorithmType evaluate_and_select_algorithm(const LogDataset *dataset, bool is_a
 
     /* Rule A: Collapse trigger.  Not enough observations or dimensions
        to form stable centroids at all. */
-    if (active_dimensions == 0 || rows <= 5) {
+    if (active_dimensions == 0 || rows < 2) {
         return ALGO_FALLBACK_SCATTERPLOT;
+    }
+
+    /* Rule A-2: Tiny datasets (2-5 rows). Agglomerative clustering is the
+     * most robust choice when there are too few points for statistical
+     * stability of centroid-based or density-based methods. */
+    if (rows <= 5) {
+        return ALGO_AGGLOMERATIVE;
     }
 
     const double matrix_density = (double)total_valid / (double)(rows * cols);

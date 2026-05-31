@@ -88,12 +88,14 @@ typedef struct {
     double outlier_ratio;
     size_t cluster_count;
     double cluster_balance;      /* min/max cluster ratio; 1.0 = perfect balance */
+    double schema_drift;         /* 0.0 = uniform format, 1.0 = max mixed */
 } logana_analysis_summary_t;
 
 typedef struct {
     float *values;
     uint64_t *timestamps;        /* Normalized epoch milliseconds per row */
     uint8_t *valid_mask;         /* Per-dimension validity: 1 = valid, 0 = invalid/parsed trap */
+    uint8_t *formats;            /* Per-row format tag: 0=JSON, 1=KV, 2=Text */
     size_t row_count;
     size_t dimensions;
     int *labels;

@@ -38,6 +38,7 @@ typedef struct {
     double slope;
     double outlier_ratio;
     double cluster_balance;
+    double schema_drift;
     const char *svg;
     const char *html;
     const char *error;
@@ -56,6 +57,7 @@ static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapsh
     snapshot->slope = job->summary.slope;
     snapshot->outlier_ratio = job->summary.outlier_ratio;
     snapshot->cluster_balance = job->summary.cluster_balance;
+    snapshot->schema_drift = job->summary.schema_drift;
     snapshot->svg = job->svg;
     snapshot->html = job->html;
     snapshot->error = job->error;
@@ -112,6 +114,15 @@ static void logana_populate_insights(cJSON *insights, const logana_job_snapshot_
                  job->summary.min[0], job->summary.max[0],
                  job->summary.min[1], job->summary.max[1]);
         logana_add_insight(insights, "Projection", detail, "calm");
+    }
+
+    // Schema drift insight
+    if (snapshot->schema_drift > 0.3) {
+        snprintf(detail, sizeof(detail),
+                 "Mixed schema detected (drift score %.2f). "
+                 "JSON, KV, and plain-text formats are interleaved.",
+                 snapshot->schema_drift);
+        logana_add_insight(insights, "Schema consistency", detail, "hot");
     }
 
     // Outlier insight with context
@@ -276,6 +287,11 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
         double raw_y = job->matrix.values[i * dims + d1];
         double nx = (raw_x - min_x) / span_x;
         double ny = (raw_y - min_y) / span_y;
+        if (!isfinite(nx) || !isfinite(ny)) continue;
+        if (nx < 0.0) nx = 0.0;
+        if (nx > 1.0) nx = 1.0;
+        if (ny < 0.0) ny = 0.0;
+        if (ny > 1.0) ny = 1.0;
         double x = plot_left + nx * plot_w;
         double y = plot_bottom - ny * plot_h;
 
@@ -469,6 +485,7 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddNumberToObject(json, "entropy", snapshot.entropy);
     cJSON_AddNumberToObject(json, "trendSlope", snapshot.slope);
     cJSON_AddNumberToObject(json, "outlierRatio", snapshot.outlier_ratio);
+    cJSON_AddNumberToObject(json, "schemaDrift", snapshot.schema_drift);
     cJSON_AddStringToObject(json, "html", snapshot.html ? snapshot.html : "");
     cJSON_AddStringToObject(json, "svg", snapshot.svg ? snapshot.svg : "");
     cJSON_AddStringToObject(json, "error", snapshot.error ? snapshot.error : "");

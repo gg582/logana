@@ -6,7 +6,7 @@
 #include <float.h>
 
 #define SCHEMA_DENSITY_THRESHOLD  0.20
-#define MIN_CLUSTERABLE_ROWS      6
+#define MIN_CLUSTERABLE_ROWS      2
 #define MIN_ACTIVE_DIMENSIONS     1
 #define CV_SIGNAL_THRESHOLD       0.05
 #define DQI_MINIMUM               0.15

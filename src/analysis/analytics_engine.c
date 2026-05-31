@@ -98,9 +98,11 @@ static int logana_safe_strtod(const char *str, double *out, bool *out_valid, boo
         return 1; /* token consumed but marked invalid */
     }
 
+    const char *num_start = str;
+    while (*num_start && (isspace((unsigned char)*num_start) || *num_start == '"' || *num_start == '\'')) ++num_start;
     char *end = NULL;
-    double value = strtod(str, &end);
-    if (end == str) return 0;
+    double value = strtod(num_start, &end);
+    if (end == num_start) return 0;
 
     /* Strict tail check: reject partial consumptions like "200 OK" or "0x7FFF" */
     for (const char *p = end; *p; ++p) {
@@ -111,6 +113,16 @@ static int logana_safe_strtod(const char *str, double *out, bool *out_valid, boo
     }
 
     if (!isfinite(value)) {
+        if (out_valid) *out_valid = false;
+        *out = 0.0;
+        return 1;
+    }
+
+    /* Magnitude guard: reject values that would dominate statistics or
+     * overflow float conversion downstream. 1e15 covers all realistic
+     * log metrics (latency, throughput, counts) while catching corrupted
+     * timestamps, memory addresses, or parsing artifacts. */
+    if (fabs(value) > 1e15) {
         if (out_valid) *out_valid = false;
         *out = 0.0;
         return 1;
@@ -417,8 +429,9 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     uint64_t *timestamps = malloc(row_capacity * sizeof(uint64_t));
     uint8_t *valid_mask = malloc(row_capacity * dims * sizeof(uint8_t));
     uint64_t *categories = calloc(row_capacity, sizeof(uint64_t));
-    if (!values || !timestamps || !valid_mask || !categories) {
-        free(values); free(timestamps); free(valid_mask); free(categories);
+    uint8_t *formats = calloc(row_capacity, sizeof(uint8_t));
+    if (!values || !timestamps || !valid_mask || !categories || !formats) {
+        free(values); free(timestamps); free(valid_mask); free(categories); free(formats);
         return 0;
     }
 
@@ -434,12 +447,27 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
                 uint64_t *grown_t = realloc(timestamps, new_cap * sizeof(uint64_t));
                 uint8_t *grown_m = realloc(valid_mask, new_cap * dims * sizeof(uint8_t));
                 uint64_t *grown_c = realloc(categories, new_cap * sizeof(uint64_t));
-                if (!grown_v || !grown_t || !grown_m || !grown_c) break;
+                uint8_t *grown_f = realloc(formats, new_cap * sizeof(uint8_t));
+                if (!grown_v || !grown_t || !grown_m || !grown_c || !grown_f) break;
                 values = grown_v;
                 timestamps = grown_t;
                 valid_mask = grown_m;
                 categories = grown_c;
+                formats = grown_f;
                 row_capacity = new_cap;
+            }
+
+            /* Detect row format: JSON = 0, KV = 1, Text = 2 */
+            {
+                const char *p = cursor;
+                while (*p && isspace((unsigned char)*p)) ++p;
+                if (*p == '{' || *p == '[') {
+                    formats[rows] = 0;
+                } else if (strchr(cursor, '=') != NULL || (strchr(cursor, ':') != NULL && strstr(cursor, ", ") != NULL)) {
+                    formats[rows] = 1;
+                } else {
+                    formats[rows] = 2;
+                }
             }
 
             /* Initialize current row validity to all-valid */
@@ -571,9 +599,18 @@ static size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     job->matrix.timestamps = timestamps;
     job->matrix.valid_mask = valid_mask;
     job->matrix.categories = categories;
+    job->matrix.formats = formats;
     job->matrix.row_count = rows;
     job->matrix.dimensions = dims;
     return rows;
+}
+
+static int logana_compare_double(const void *a, const void *b) {
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
 }
 
 static void logana_compute_summary(logana_job_t *job) {
@@ -656,18 +693,64 @@ static void logana_compute_summary(logana_job_t *job) {
         }
     }
 
-    size_t outliers = 0;
-    for (size_t r = 0; r < rows; ++r) {
-        for (size_t d = 0; d < dims; ++d) {
-            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
-            double delta = job->matrix.values[r * dims + d] - job->summary.mean[d];
-            job->summary.stddev[d] += delta * delta;
-        }
-    }
+    /* ------------------------------------------------------------------
+     * Robust statistics: winsorize each dimension at median ± 5·MAD
+     * before computing mean and stddev.  This prevents a single extreme
+     * value (e.g. a corrupted counter or mis-parsed timestamp) from
+     * inflating variance and destroying z-score based outlier detection.
+     * ------------------------------------------------------------------ */
     for (size_t d = 0; d < dims; ++d) {
-        job->summary.stddev[d] = valid_counts[d] > 0 ? sqrt(job->summary.stddev[d] / (double)valid_counts[d]) : 0.0;
+        if (valid_counts[d] == 0) continue;
+
+        size_t n = valid_counts[d];
+        double *vals = malloc(n * sizeof(double));
+        if (!vals) continue;
+
+        size_t idx = 0;
+        for (size_t r = 0; r < rows; ++r) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+            vals[idx++] = job->matrix.values[r * dims + d];
+        }
+
+        qsort(vals, n, sizeof(double), logana_compare_double);
+
+        double median = vals[n / 2];
+        if ((n % 2) == 0) median = (vals[n / 2 - 1] + vals[n / 2]) * 0.5;
+
+        for (size_t i = 0; i < n; ++i) vals[i] = fabs(vals[i] - median);
+        qsort(vals, n, sizeof(double), logana_compare_double);
+        double mad = vals[n / 2];
+        if ((n % 2) == 0) mad = (vals[n / 2 - 1] + vals[n / 2]) * 0.5;
+
+        double mad_sigma = mad > 0.0001 ? mad * 1.4826 : 0.0001;
+        double lower = median - 5.0 * mad_sigma;
+        double upper = median + 5.0 * mad_sigma;
+
+        double wsum = 0.0;
+        for (size_t r = 0; r < rows; ++r) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+            double v = job->matrix.values[r * dims + d];
+            if (v < lower) v = lower;
+            if (v > upper) v = upper;
+            wsum += v;
+        }
+        job->summary.mean[d] = wsum / (double)n;
+
+        double wvar = 0.0;
+        for (size_t r = 0; r < rows; ++r) {
+            if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
+            double v = job->matrix.values[r * dims + d];
+            if (v < lower) v = lower;
+            if (v > upper) v = upper;
+            double delta = v - job->summary.mean[d];
+            wvar += delta * delta;
+        }
+        job->summary.stddev[d] = sqrt(wvar / (double)n);
+
+        free(vals);
     }
 
+    size_t outliers = 0;
     for (size_t r = 0; r < rows; ++r) {
         double score = 0.0;
         size_t valid_d = 0;
@@ -689,6 +772,25 @@ static void logana_compute_summary(logana_job_t *job) {
 
     job->summary.slope = slope_den > 0.0 ? (slope_num / slope_den) : 0.0;
     job->summary.outlier_ratio = rows ? ((double)outliers / (double)rows) : 0.0;
+
+    /* Format consistency / schema drift score */
+    if (job->matrix.formats && rows > 0) {
+        size_t fmt_counts[3] = {0};
+        for (size_t r = 0; r < rows; ++r) {
+            uint8_t f = job->matrix.formats[r];
+            if (f < 3) fmt_counts[f]++;
+        }
+        double fmt_entropy = 0.0;
+        for (size_t f = 0; f < 3; ++f) {
+            if (fmt_counts[f] == 0) continue;
+            double p = (double)fmt_counts[f] / (double)rows;
+            fmt_entropy -= p * log2(p);
+        }
+        double max_entropy = log2(3.0);
+        job->summary.schema_drift = max_entropy > 0.0 ? (fmt_entropy / max_entropy) : 0.0;
+    } else {
+        job->summary.schema_drift = 0.0;
+    }
 }
 
 static size_t logana_assign_cluster_modes(const float *modes, size_t mode_count, size_t dims,
@@ -986,7 +1088,9 @@ static size_t logana_cluster_by_category(logana_job_t *job, size_t target_k,
         cat_idx_map[r] = found;
     }
 
-    if (unique_count <= 1) {
+    /* High cardinality guard: if more than half the rows are unique,
+     * the category field is effectively an ID and provides no grouping signal. */
+    if (unique_count <= 1 || unique_count > rows / 2) {
         if (use_auto) return logana_run_kmeans_auto(job, dist_fn, summary);
         return logana_run_kmeans(job, target_k, 0, dist_fn, summary);
     }
@@ -1377,8 +1481,14 @@ static logana_algorithm_t logana_select_algorithm_auto(const logana_engine_t *en
     (void)engine;
 
     /* Stage 0: Hard guardrails */
-    if (rows <= 5 || active_dims == 0) {
+    if (rows < 2 || active_dims == 0) {
         return LOGANA_ALGO_FALLBACK_SCATTERPLOT;
+    }
+
+    /* Stage 0.5: Tiny datasets — agglomerative is the only robust
+     * method when there are too few points for statistical stability. */
+    if (rows <= 5) {
+        return LOGANA_ALGO_AGGLOMERATIVE;
     }
 
     /* Stage 1: Large-scale dense streaming -> BIRCH
@@ -1467,7 +1577,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
         double matrix_density = (double)total_valid / (double)(rows * job->matrix.dimensions);
 
         /* Early exit: insufficient rows or no viable dimensions */
-        if (rows <= 5 || active_dims == 0) {
+        if (rows < 2 || active_dims == 0) {
             job->algorithm = LOGANA_ALGO_FALLBACK_SCATTERPLOT;
             job->summary.cluster_count = 0;
             job->summary.slope = 0.0;
@@ -1629,6 +1739,7 @@ void logana_job_destroy(logana_job_t *job) {
     free(job->matrix.values);
     free(job->matrix.timestamps);
     free(job->matrix.valid_mask);
+    free(job->matrix.formats);
     free(job->matrix.labels);
     free(job->matrix.categories);
     free(job->svg);
