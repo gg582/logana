@@ -414,13 +414,15 @@ function scatterSvgMarkup(scatter: ScatterSeries) {
 function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   const width = 960;
   const height = 560;
-  const left = 140;
-  const top = 100;
   const right = 60;
   const bottom = 60;
 
   const keys = Array.from(new Set(cells.flatMap((c) => [c.x, c.y]))).sort();
   if (keys.length === 0) return "";
+
+  const maxLabelLen = Math.max(...keys.map((k) => k.length), 1);
+  const left = Math.max(170, maxLabelLen * 9 + 20);
+  const top = Math.max(120, keys.length > 8 ? 150 : 120);
 
   const cellSize = Math.min(
     (width - left - right) / keys.length,
@@ -429,8 +431,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   );
   const innerW = cellSize * keys.length;
   const innerH = cellSize * keys.length;
-  const labelFontSize = Math.max(9, Math.min(14, cellSize * 0.22));
-  const valueFontSize = Math.max(9, Math.min(13, cellSize * 0.2));
+  const labelFontSize = Math.max(7, Math.min(11, cellSize * 0.18));
+  const valueFontSize = Math.max(7, Math.min(11, cellSize * 0.16));
 
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
@@ -468,8 +470,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       const x = left + i * cellSize + cellSize / 2;
       const y = top + i * cellSize + cellSize / 2;
       return `
-        <text x="${x}" y="${top - 10}" text-anchor="middle" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
-        <text x="${left - 10}" y="${y + 5}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
+        <text x="${x}" y="${top - 14}" text-anchor="end" transform="rotate(-45, ${x}, ${top - 14})" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
+        <text x="${left - 14}" y="${y + 4}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
       `;
     })
     .join("");
