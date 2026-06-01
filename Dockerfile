@@ -26,6 +26,7 @@ RUN apt-get update \
 COPY . .
 
 RUN make -C lib/libttak clean
+RUN make -C .deps/cwist clean
 RUN make CWIST_SYSTEM_SQLITE=1
 
 WORKDIR /app/web
