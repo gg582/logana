@@ -241,7 +241,7 @@ static void logana_http_handler(int client_fd, void *arg) {
 
 int logana_server_run(logana_engine_t *engine, const logana_server_opts_t *opts) {
     struct sockaddr_in addr;
-    int server_fd = cwist_make_socket_ipv4(&addr, "127.0.0.1", opts->port, 128);
+    int server_fd = cwist_make_socket_ipv4(&addr, "0.0.0.0", opts->port, 128);
     if (server_fd < 0) return -1;
 
     g_engine = engine;

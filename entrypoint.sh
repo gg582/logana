@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 /app/bin/logana-engine &
 ENGINE_PID=$!
 
 cd /app/web
-node ./server.js
-
-wait "${ENGINE_PID}"
+exec node ./server.js
