@@ -308,10 +308,24 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
             if (radius > 7.0) radius = 7.0;
         }
 
-        char point[256];
+        bool outlier = false;
+        if (job->matrix.dimensions > 0) {
+            double score = 0.0;
+            size_t valid_d = 0;
+            for (size_t d = 0; d < job->matrix.dimensions; ++d) {
+                if (job->matrix.valid_mask && !job->matrix.valid_mask[i * job->matrix.dimensions + d]) continue;
+                double sigma = job->summary.stddev[d] > 0.0001 ? job->summary.stddev[d] : 1.0;
+                double z = (job->matrix.values[i * job->matrix.dimensions + d] - job->summary.mean[d]) / sigma;
+                score += z * z;
+                ++valid_d;
+            }
+            outlier = (valid_d > 0 && score > 9.0);
+        }
+
+        char point[384];
         snprintf(point, sizeof(point),
-                 "<circle cx='%.2f' cy='%.2f' r='%.2f' fill='%s' opacity='0.88'/>",
-                 x, y, radius, color);
+                 "<circle cx='%.2f' cy='%.2f' r='%.2f' fill='%s' opacity='0.88' data-row='%zu' data-cluster='%d' data-outlier='%s'/>",
+                 x, y, radius, color, i, label, outlier ? "true" : "false");
         strncat(svg, point, cap - strlen(svg) - 1);
     }
     strncat(svg, "</g>", cap - strlen(svg) - 1);
@@ -489,6 +503,45 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "html", snapshot.html ? snapshot.html : "");
     cJSON_AddStringToObject(json, "svg", snapshot.svg ? snapshot.svg : "");
     cJSON_AddStringToObject(json, "error", snapshot.error ? snapshot.error : "");
+
+    cJSON *points = cJSON_CreateArray();
+    if (points && job->matrix.values && job->matrix.labels) {
+        size_t d0 = 0;
+        size_t d1 = job->matrix.dimensions > 1 ? 1 : 0;
+        for (size_t i = 0; i < job->matrix.row_count; ++i) {
+            cJSON *pt = cJSON_CreateObject();
+            if (!pt) continue;
+            double xv = 0.0, yv = 0.0;
+            bool valid = true;
+            if (job->matrix.valid_mask) {
+                if (!job->matrix.valid_mask[i * job->matrix.dimensions + d0]) valid = false;
+                if (!job->matrix.valid_mask[i * job->matrix.dimensions + d1]) valid = false;
+            }
+            if (valid) {
+                xv = job->matrix.values[i * job->matrix.dimensions + d0];
+                yv = job->matrix.values[i * job->matrix.dimensions + d1];
+            }
+            cJSON_AddNumberToObject(pt, "x", xv);
+            cJSON_AddNumberToObject(pt, "y", yv);
+            cJSON_AddNumberToObject(pt, "label", job->matrix.labels[i]);
+            bool outlier = false;
+            if (valid && job->matrix.dimensions > 0) {
+                double score = 0.0;
+                size_t valid_d = 0;
+                for (size_t d = 0; d < job->matrix.dimensions; ++d) {
+                    if (job->matrix.valid_mask && !job->matrix.valid_mask[i * job->matrix.dimensions + d]) continue;
+                    double sigma = job->summary.stddev[d] > 0.0001 ? job->summary.stddev[d] : 1.0;
+                    double z = (job->matrix.values[i * job->matrix.dimensions + d] - job->summary.mean[d]) / sigma;
+                    score += z * z;
+                    ++valid_d;
+                }
+                outlier = (valid_d > 0 && score > 9.0);
+            }
+            cJSON_AddBoolToObject(pt, "outlier", outlier);
+            cJSON_AddItemToArray(points, pt);
+        }
+        cJSON_AddItemToObject(json, "points", points);
+    }
 
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);

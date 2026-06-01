@@ -112,6 +112,13 @@ const SAMPLE = `{"timestamp":"2026-05-31T18:00:01.000Z","level":"INFO","service"
 {"timestamp":"2026-05-31T18:01:39.000Z","level":"INFO","service":"auth-api","latency_ms":25.0,"http_status":200,"active_users":1200,"cpu_util":35.0,"mem_rss_mb":512.0}
 {"timestamp":"2026-05-31T18:01:40.000Z","level":"INFO","service":"payment-v2","latency_ms":115.0,"http_status":200,"active_users":400,"cpu_util":25.0,"mem_rss_mb":1024.0}`;
 
+type ClusterPoint = {
+  x: number;
+  y: number;
+  label: number;
+  outlier: boolean;
+};
+
 type Result = {
   jobId: string;
   status: string;
@@ -125,6 +132,7 @@ type Result = {
   html?: string;
   error?: string;
   algorithm?: string;
+  points?: ClusterPoint[];
 };
 
 const ALL_ALGORITHMS = [
@@ -867,6 +875,208 @@ function ScatterChart({ scatter }: { scatter: ScatterSeries }) {
   );
 }
 
+function InteractiveClusterChart({
+  points,
+  svgMarkup,
+  algorithm,
+}: {
+  points: ClusterPoint[];
+  svgMarkup?: string | null;
+  algorithm?: string;
+}) {
+  const [activeTab, setActiveTab] = useState<"interactive" | "engine">("interactive");
+  const [hovered, setHovered] = useState<ClusterPoint | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const [filter, setFilter] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const colors = ["#ffda7b", "#ff8c6a", "#f45d96", "#7ad7ff", "#8ef0b5", "#c8a4ff", "#ffb3c1", "#a0c4ff"];
+  const clusterLabels = Array.from(new Set(points.map((p) => p.label))).sort((a, b) => a - b);
+
+  const width = 960;
+  const height = 560;
+  const left = 80;
+  const right = 160;
+  const top = 60;
+  const bottom = 60;
+  const innerWidth = width - left - right;
+  const innerHeight = height - top - bottom;
+
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+
+  const projected = points.map((p) => ({
+    ...p,
+    px: left + ((p.x - minX) / spanX) * innerWidth,
+    py: top + innerHeight - ((p.y - minY) / spanY) * innerHeight,
+  }));
+
+  return (
+    <article className="viz-card" style={{ padding: 0 }}>
+      <div className="viz-head" style={{ padding: "20px 24px 0" }}>
+        <div>
+          <h3>Clustered Stream Preview</h3>
+          <p>{algorithm ? `${algorithm} · ` : ""}{points.length} points · {clusterLabels.length} clusters</p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className={`ghost-button ${activeTab === "interactive" ? "dock-active" : ""}`}
+            onClick={() => setActiveTab("interactive")}
+          >
+            Interactive
+          </button>
+          {svgMarkup ? (
+            <button
+              className={`ghost-button ${activeTab === "engine" ? "dock-active" : ""}`}
+              onClick={() => setActiveTab("engine")}
+            >
+              Backend Render
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {activeTab === "interactive" ? (
+        <>
+          <div style={{ display: "flex", gap: 8, padding: "12px 24px", flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              className={`ghost-button ${filter === null ? "dock-active" : ""}`}
+              onClick={() => setFilter(null)}
+              style={{ fontSize: 13 }}
+            >
+              All
+            </button>
+            {clusterLabels.map((label) => (
+              <button
+                key={label}
+                className={`ghost-button ${filter === label ? "dock-active" : ""}`}
+                onClick={() => setFilter(label === filter ? null : label)}
+                style={{ fontSize: 13 }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: colors[label % colors.length],
+                    marginRight: 6,
+                  }}
+                />
+                Cluster {label}
+              </button>
+            ))}
+          </div>
+          <div ref={containerRef} style={{ position: "relative", width: "100%", height: 480, overflow: "hidden" }}>
+            <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "100%" }}>
+              <defs>
+                <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#1a1310" />
+                  <stop offset="50%" stop-color="#241916" />
+                  <stop offset="100%" stop-color="#131114" />
+                </linearGradient>
+              </defs>
+              <rect width={width} height={height} rx={34} fill="url(#bgGradient)" />
+              {Array.from({ length: 10 }).map((_, i) => (
+                <line
+                  key={`gx-${i}`}
+                  x1={left + (innerWidth * i) / 9}
+                  y1={top}
+                  x2={left + (innerWidth * i) / 9}
+                  y2={top + innerHeight}
+                  stroke="#3b322c"
+                  strokeWidth="1"
+                  strokeDasharray="4 6"
+                  opacity={0.5}
+                />
+              ))}
+              {Array.from({ length: 8 }).map((_, i) => (
+                <line
+                  key={`gy-${i}`}
+                  x1={left}
+                  y1={top + (innerHeight * i) / 7}
+                  x2={left + innerWidth}
+                  y2={top + (innerHeight * i) / 7}
+                  stroke="#3b322c"
+                  strokeWidth="1"
+                  strokeDasharray="4 6"
+                  opacity={0.5}
+                />
+              ))}
+              {projected.map((p, i) => {
+                if (filter !== null && p.label !== filter) return null;
+                const isHovered = hovered === points[i];
+                const baseR = p.outlier ? 6 : 4.5;
+                return (
+                  <circle
+                    key={i}
+                    cx={p.px}
+                    cy={p.py}
+                    r={isHovered ? baseR * 1.8 : baseR}
+                    fill={colors[p.label % colors.length]}
+                    opacity={isHovered ? 1 : 0.85}
+                    stroke={p.outlier ? "#ff6b6b" : "none"}
+                    strokeWidth={p.outlier ? 2 : 0}
+                    style={{ transition: "all 0.2s ease", cursor: "pointer" }}
+                    onMouseEnter={(e) => {
+                      setHovered(points[i]);
+                      const rect = containerRef.current?.getBoundingClientRect();
+                      setMousePos({
+                        x: e.clientX - (rect?.left ?? 0),
+                        y: e.clientY - (rect?.top ?? 0),
+                      });
+                    }}
+                    onMouseMove={(e) => {
+                      const rect = containerRef.current?.getBoundingClientRect();
+                      setMousePos({
+                        x: e.clientX - (rect?.left ?? 0),
+                        y: e.clientY - (rect?.top ?? 0),
+                      });
+                    }}
+                    onMouseLeave={() => setHovered(null)}
+                  />
+                );
+              })}
+            </svg>
+            {hovered && (
+              <div
+                className="donut-tooltip"
+                style={{
+                  position: "absolute",
+                  left: mousePos.x + 12,
+                  top: mousePos.y + 12,
+                  pointerEvents: "none",
+                }}
+              >
+                <div className="donut-tooltip-head">Cluster {hovered.label}</div>
+                <div className="donut-tooltip-line">x: {hovered.x.toFixed(2)}</div>
+                <div className="donut-tooltip-line">y: {hovered.y.toFixed(2)}</div>
+                {hovered.outlier && (
+                  <div className="donut-tooltip-line" style={{ color: "#ff6b6b" }}>
+                    Outlier
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div
+          className="preview preview-large"
+          dangerouslySetInnerHTML={{ __html: svgMarkup ?? "" }}
+          style={{ height: 480 }}
+        />
+      )}
+    </article>
+  );
+}
+
 function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
   const keys = useMemo(() => Array.from(new Set(cells.flatMap((c) => [c.x, c.y]))).sort(), [cells]);
   const cellSize = Math.max(24, Math.min(56, 640 / Math.max(keys.length, 1)));
@@ -1397,7 +1607,15 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
-            <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
+            {result?.points && result.points.length > 0 ? (
+              <InteractiveClusterChart
+                points={result.points}
+                svgMarkup={result.svg}
+                algorithm={result.algorithm}
+              />
+            ) : (
+              <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
+            )}
           </div>
         </section>
       )}
