@@ -49,7 +49,7 @@ static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapsh
     snapshot->job_id = job->job_id;
     snapshot->status = job->status;
     snapshot->updated_ms = job->updated_ms;
-    snapshot->algorithm = job->algorithm;
+    snapshot->algorithm = (job->result.algorithm != LOGANA_ALGO_AUTO) ? job->result.algorithm : job->algorithm;
     snapshot->row_count = job->summary.row_count;
     snapshot->dimensions = job->summary.dimensions;
     snapshot->cluster_count = job->summary.cluster_count;
@@ -226,11 +226,11 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     // Compute cluster counts for radius sizing
     size_t *cluster_counts = NULL;
     int max_label = 0;
-    if (job->matrix.labels) {
-        cluster_counts = calloc(job->summary.cluster_count + 1, sizeof(size_t));
+    if (job->result.labels) {
+        cluster_counts = calloc(job->result.cluster_count + 1, sizeof(size_t));
         for (size_t i = 0; i < rows; ++i) {
-            int label = job->matrix.labels[i];
-            if (label < 0) label = (int)job->summary.cluster_count; // noise
+            int label = job->result.labels[i];
+            if (label < 0) label = (int)job->result.cluster_count; // noise
             if (label > max_label) max_label = label;
             if (cluster_counts) cluster_counts[label]++;
         }
@@ -295,8 +295,9 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
         double x = plot_left + nx * plot_w;
         double y = plot_bottom - ny * plot_h;
 
-        int label = job->matrix.labels ? job->matrix.labels[i] : 0;
-        if (label < 0) label = (int)job->summary.cluster_count; // noise -> last color
+        int label = job->result.labels ? job->result.labels[i] : 0;
+        bool is_noise_point = job->result.is_noise ? job->result.is_noise[i] : (label < 0);
+        if (label < 0) label = (int)job->result.cluster_count; // noise -> last color
         const char *color = engine->config.color_palette[(size_t)abs(label) % color_count];
 
         // Vary radius slightly by cluster density
@@ -324,8 +325,8 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
 
         char point[384];
         snprintf(point, sizeof(point),
-                 "<circle cx='%.2f' cy='%.2f' r='%.2f' fill='%s' opacity='0.88' data-row='%zu' data-cluster='%d' data-outlier='%s'/>",
-                 x, y, radius, color, i, label, outlier ? "true" : "false");
+                 "<circle cx='%.2f' cy='%.2f' r='%.2f' fill='%s' opacity='0.88' data-row='%zu' data-cluster='%d' data-outlier='%s' data-noise='%s'/>",
+                 x, y, radius, color, i, label, outlier ? "true" : "false", is_noise_point ? "true" : "false");
         strncat(svg, point, cap - strlen(svg) - 1);
     }
     strncat(svg, "</g>", cap - strlen(svg) - 1);
@@ -346,11 +347,11 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     }
 
     // Legend for clusters
-    if (job->matrix.labels && job->summary.cluster_count > 0) {
+    if (job->result.labels && job->result.cluster_count > 0) {
         strncat(svg, "<g>", cap - strlen(svg) - 1);
         int lx = plot_right - 140;
         int ly = plot_top + 10;
-        for (size_t c = 0; c < job->summary.cluster_count && c < color_count; ++c) {
+        for (size_t c = 0; c < job->result.cluster_count && c < color_count; ++c) {
             char legend[256];
             snprintf(legend, sizeof(legend),
                      "<circle cx='%d' cy='%d' r='5' fill='%s'/>"
@@ -367,10 +368,11 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     snprintf(footer, sizeof(footer),
              "<g fill='#d6edf8'>"
              "<text x='56' y='36' font-size='24' font-family='IBM Plex Sans, sans-serif'>Clustered Stream Preview</text>"
-             "<text x='56' y='%d' font-size='16' fill='#8fb5c8'>rows=%zu dims=%zu algorithm=%s clusters=%zu outliers=%.1f%%</text>"
+             "<text x='56' y='%d' font-size='16' fill='#8fb5c8'>rows=%zu dims=%zu algorithm=%s clusters=%zu noise=%zu outliers=%.1f%%</text>"
              "</g></svg>",
              h - 20, job->summary.row_count, job->summary.dimensions,
-             logana_algorithm_name(job->algorithm), job->summary.cluster_count,
+             logana_algorithm_name(job->result.algorithm != LOGANA_ALGO_AUTO ? job->result.algorithm : job->algorithm), job->result.cluster_count,
+             job->result.noise_count,
              job->summary.outlier_ratio * 100.0);
     strncat(svg, footer, cap - strlen(svg) - 1);
 
@@ -495,7 +497,7 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "status", logana_status_name(snapshot.status));
     cJSON_AddStringToObject(json, "algorithm", logana_algorithm_name(snapshot.algorithm));
     cJSON_AddNumberToObject(json, "rows", (double)snapshot.row_count);
-    cJSON_AddNumberToObject(json, "clusters", (double)snapshot.cluster_count);
+    cJSON_AddNumberToObject(json, "clusters", (double)job->result.cluster_count);
     cJSON_AddNumberToObject(json, "entropy", snapshot.entropy);
     cJSON_AddNumberToObject(json, "trendSlope", snapshot.slope);
     cJSON_AddNumberToObject(json, "outlierRatio", snapshot.outlier_ratio);
@@ -505,7 +507,7 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "error", snapshot.error ? snapshot.error : "");
 
     cJSON *points = cJSON_CreateArray();
-    if (points && job->matrix.values && job->matrix.labels) {
+    if (points && job->matrix.values && job->result.labels) {
         size_t d0 = 0;
         size_t d1 = job->matrix.dimensions > 1 ? 1 : 0;
         for (size_t i = 0; i < job->matrix.row_count; ++i) {
@@ -523,7 +525,9 @@ char *logana_job_result_json(logana_job_t *job) {
             }
             cJSON_AddNumberToObject(pt, "x", xv);
             cJSON_AddNumberToObject(pt, "y", yv);
-            cJSON_AddNumberToObject(pt, "label", job->matrix.labels[i]);
+            cJSON_AddNumberToObject(pt, "label", job->result.labels[i]);
+            bool is_noise_point = job->result.is_noise ? job->result.is_noise[i] : (job->result.labels[i] < 0);
+            cJSON_AddBoolToObject(pt, "isNoise", is_noise_point);
             bool outlier = false;
             if (valid && job->matrix.dimensions > 0) {
                 double score = 0.0;

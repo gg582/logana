@@ -92,6 +92,17 @@ typedef struct {
 } logana_analysis_summary_t;
 
 typedef struct {
+    int    *labels;              /* Per-row cluster assignment; -1 = noise */
+    bool   *is_noise;            /* Explicit noise flag to prevent UI indexing bugs */
+    size_t  row_count;
+    size_t  cluster_count;       /* Logical clusters EXCLUDING noise */
+    size_t  noise_count;
+    logana_algorithm_t algorithm;
+    double  silhouette_score;
+    double  davies_bouldin_index;
+} logana_cluster_result_t;
+
+typedef struct {
     double *values;
     uint64_t *timestamps;        /* Normalized epoch milliseconds per row */
     uint8_t *valid_mask;         /* Per-dimension validity: 1 = valid, 0 = invalid/parsed trap */
@@ -113,6 +124,7 @@ typedef struct logana_job {
     logana_algorithm_t algorithm;
     logana_feature_matrix_t matrix;
     logana_analysis_summary_t summary;
+    logana_cluster_result_t   result;
     char *svg;
     char *html;
     char error[256];

@@ -116,6 +116,7 @@ type ClusterPoint = {
   x: number;
   y: number;
   label: number;
+  isNoise: boolean;
   outlier: boolean;
 };
 
@@ -1000,7 +1001,7 @@ function InteractiveClusterChart({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const colors = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
-  const clusterLabels = Array.from(new Set(points.map((p) => p.label))).sort((a, b) => a - b);
+  const clusterLabels = Array.from(new Set(points.filter((p) => !p.isNoise).map((p) => p.label))).sort((a, b) => a - b);
 
   const width = 960;
   const height = 560;
@@ -1119,6 +1120,7 @@ function InteractiveClusterChart({
                 />
               ))}
               {projected.map((p, i) => {
+                if (p.isNoise) return null;
                 if (filter !== null && p.label !== filter) return null;
                 const isHovered = hovered === points[i];
                 const baseR = p.outlier ? 6 : 4.5;
@@ -1163,9 +1165,14 @@ function InteractiveClusterChart({
                   pointerEvents: "none",
                 }}
               >
-                <div className="donut-tooltip-head">Cluster {hovered.label}</div>
+                <div className="donut-tooltip-head">{hovered.isNoise ? "Noise" : `Cluster ${hovered.label}`}</div>
                 <div className="donut-tooltip-line">x: {hovered.x.toFixed(2)}</div>
                 <div className="donut-tooltip-line">y: {hovered.y.toFixed(2)}</div>
+                {hovered.isNoise && (
+                  <div className="donut-tooltip-line" style={{ color: "#94a3b8" }}>
+                    Noise point
+                  </div>
+                )}
                 {hovered.outlier && (
                   <div className="donut-tooltip-line" style={{ color: "#ff6b6b" }}>
                     Outlier
