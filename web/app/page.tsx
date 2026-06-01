@@ -260,8 +260,8 @@ function histogramSvgMarkup(bars: HistogramBar[], title: string, subtitle: strin
       return `
         <g>
           <rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="16" fill="url(#barGradient)" />
-          <text x="${x + barWidth / 2}" y="${y - 12}" text-anchor="middle" fill="#ffe7b7" font-size="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(String(bar.value))}</text>
-          <text x="${x + barWidth / 2}" y="${height - 34}" text-anchor="middle" fill="#7c6750" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(bar.label)}</text>
+          <text x="${x + barWidth / 2}" y="${y - 12}" text-anchor="middle" fill="#c4b5fd" font-size="20" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(String(bar.value))}</text>
+          <text x="${x + barWidth / 2}" y="${height - 34}" text-anchor="middle" fill="#6b6398" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(bar.label)}</text>
         </g>`;
     })
     .join("");
@@ -270,19 +270,19 @@ function histogramSvgMarkup(bars: HistogramBar[], title: string, subtitle: strin
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
       <defs>
         <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#1a1310" />
-          <stop offset="50%" stop-color="#241916" />
-          <stop offset="100%" stop-color="#131114" />
+          <stop offset="0%" stop-color="#0f0c1a" />
+          <stop offset="50%" stop-color="#1a1430" />
+          <stop offset="100%" stop-color="#0d0a18" />
         </linearGradient>
         <linearGradient id="barGradient" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stop-color="#ffd978" />
-          <stop offset="100%" stop-color="#ff7c66" />
+          <stop offset="0%" stop-color="#a78bfa" />
+          <stop offset="100%" stop-color="#f472b6" />
         </linearGradient>
       </defs>
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
-      <text x="${left}" y="48" fill="#fff1d6" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
-      <text x="${left}" y="74" fill="#b69774" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(subtitle)}</text>
-      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#4b3a30" stroke-width="2" />
+      <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
+      <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(subtitle)}</text>
+      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#3a3050" stroke-width="2" />
       ${rects}
     </svg>`;
 }
@@ -316,7 +316,7 @@ function lineSvgMarkup(series: SeriesChart) {
       return `
         <g>
           <line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" stroke="#3b322c" stroke-width="1.5" stroke-dasharray="6 10" />
-          <text x="24" y="${y + 6}" fill="#8d7561" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(0))}</text>
+          <text x="24" y="${y + 6}" fill="#7c75a8" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(0))}</text>
         </g>`;
     })
     .join("");
@@ -334,16 +334,16 @@ function lineSvgMarkup(series: SeriesChart) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
       <defs>
         <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#1a1310" />
-          <stop offset="50%" stop-color="#241916" />
-          <stop offset="100%" stop-color="#131114" />
+          <stop offset="0%" stop-color="#0f0c1a" />
+          <stop offset="50%" stop-color="#1a1430" />
+          <stop offset="100%" stop-color="#0d0a18" />
         </linearGradient>
       </defs>
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
-      <text x="${left}" y="48" fill="#fff1d6" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(series.key)}</text>
-      <text x="${left}" y="74" fill="#b69774" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">timestamp trend</text>
+      <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(series.key)}</text>
+      <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">timestamp trend</text>
       ${guides}
-      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#4b3a30" stroke-width="2" />
+      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#3a3050" stroke-width="2" />
       <path d="${path}" fill="none" stroke="${series.color}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
       ${dots}
     </svg>`;
@@ -379,7 +379,7 @@ function scatterSvgMarkup(scatter: ScatterSeries) {
     .map((ratio) => {
       const x = left + ratio * innerWidth;
       const value = minX + ratio * spanX;
-      return `<text x="${x}" y="${height - 28}" text-anchor="middle" fill="#7c6750" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(1))}</text>`;
+      return `<text x="${x}" y="${height - 28}" text-anchor="middle" fill="#6b6398" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(1))}</text>`;
     })
     .join("");
 
@@ -387,7 +387,7 @@ function scatterSvgMarkup(scatter: ScatterSeries) {
     .map((ratio) => {
       const y = top + innerHeight - ratio * innerHeight;
       const value = minY + ratio * spanY;
-      return `<text x="18" y="${y + 5}" fill="#7c6750" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(1))}</text>`;
+      return `<text x="18" y="${y + 5}" fill="#6b6398" font-size="16" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(value.toFixed(1))}</text>`;
     })
     .join("");
 
@@ -395,16 +395,16 @@ function scatterSvgMarkup(scatter: ScatterSeries) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
       <defs>
         <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#1a1310" />
-          <stop offset="50%" stop-color="#241916" />
-          <stop offset="100%" stop-color="#131114" />
+          <stop offset="0%" stop-color="#0f0c1a" />
+          <stop offset="50%" stop-color="#1a1430" />
+          <stop offset="100%" stop-color="#0d0a18" />
         </linearGradient>
       </defs>
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
-      <text x="${left}" y="48" fill="#fff1d6" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(scatter.key)}</text>
-      <text x="${left}" y="74" fill="#b69774" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Scatter plot</text>
-      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#4b3a30" stroke-width="2" />
-      <line x1="${left}" y1="${top}" x2="${left}" y2="${top + innerHeight}" stroke="#4b3a30" stroke-width="2" />
+      <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(scatter.key)}</text>
+      <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Scatter plot</text>
+      <line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}" stroke="#3a3050" stroke-width="2" />
+      <line x1="${left}" y1="${top}" x2="${left}" y2="${top + innerHeight}" stroke="#3a3050" stroke-width="2" />
       ${xGuides}
       ${yGuides}
       ${dots}
@@ -435,14 +435,14 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
     if (v >= 0) {
-      const r = Math.round(26 + t * (255 - 26));
-      const g = Math.round(19 + t * (218 - 19));
-      const b = Math.round(16 + t * (123 - 16));
+      const r = Math.round(34 + t * (59 - 34));
+      const g = Math.round(211 + t * (130 - 211));
+      const b = Math.round(238 + t * (246 - 238));
       return `rgb(${r},${g},${b})`;
     }
-    const r = Math.round(26 + t * (244 - 26));
-    const g = Math.round(19 + t * (93 - 19));
-    const b = Math.round(16 + t * (150 - 16));
+    const r = Math.round(244 + t * (167 - 244));
+    const g = Math.round(114 + t * (139 - 114));
+    const b = Math.round(182 + t * (250 - 182));
     return `rgb(${r},${g},${b})`;
   };
 
@@ -453,13 +453,13 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       const y = top + i * cellSize;
       if (i === j) {
         rects.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="#2a1f1b" rx="6" />`);
-        rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize - 4}" lengthAdjust="spacingAndGlyphs">1</text>`);
+        rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">1</text>`);
         continue;
       }
       const cell = cells.find((c) => (c.x === keys[i] && c.y === keys[j]) || (c.x === keys[j] && c.y === keys[i]));
       const value = cell?.value ?? 0;
       rects.push(`<rect x="${x + 1}" y="${y + 1}" width="${cellSize - 2}" height="${cellSize - 2}" fill="${colorFor(value)}" rx="6" opacity="0.9" />`);
-      rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize - 4}" lengthAdjust="spacingAndGlyphs">${value.toFixed(2)}</text>`);
+      rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${value.toFixed(2)}</text>`);
     }
   }
 
@@ -468,8 +468,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       const x = left + i * cellSize + cellSize / 2;
       const y = top + i * cellSize + cellSize / 2;
       return `
-        <text x="${x}" y="${top - 10}" text-anchor="middle" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize}" lengthAdjust="spacingAndGlyphs">${escapeXml(key)}</text>
-        <text x="${left - 10}" y="${y + 5}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" textLength="${cellSize}" lengthAdjust="spacingAndGlyphs">${escapeXml(key)}</text>
+        <text x="${x}" y="${top - 10}" text-anchor="middle" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
+        <text x="${left - 10}" y="${y + 5}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
       `;
     })
     .join("");
@@ -478,14 +478,14 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
       <defs>
         <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#1a1310" />
-          <stop offset="50%" stop-color="#241916" />
-          <stop offset="100%" stop-color="#131114" />
+          <stop offset="0%" stop-color="#0f0c1a" />
+          <stop offset="50%" stop-color="#1a1430" />
+          <stop offset="100%" stop-color="#0d0a18" />
         </linearGradient>
       </defs>
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
-      <text x="${left}" y="48" fill="#fff1d6" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
-      <text x="${left}" y="74" fill="#b69774" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Numeric correlation matrix</text>
+      <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
+      <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Numeric correlation matrix</text>
       ${labels}
       ${rects.join("")}
     </svg>`;
@@ -499,7 +499,7 @@ function donutSvgMarkup(bars: HistogramBar[], title: string, subtitle: string) {
   const radius = 160;
   const innerRadius = 100;
   const total = Math.max(bars.reduce((s, b) => s + b.value, 0), 1);
-  const colors = ["#ffda7b", "#ff8c6a", "#f45d96", "#7ad7ff", "#8ef0b5", "#c8a4ff", "#ffb3c1", "#a0c4ff"];
+  const colors = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
 
   let startAngle = 0;
   const slices = bars.map((bar, i) => {
@@ -536,14 +536,14 @@ function donutSvgMarkup(bars: HistogramBar[], title: string, subtitle: string) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
       <defs>
         <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#1a1310" />
-          <stop offset="50%" stop-color="#241916" />
-          <stop offset="100%" stop-color="#131114" />
+          <stop offset="0%" stop-color="#0f0c1a" />
+          <stop offset="50%" stop-color="#1a1430" />
+          <stop offset="100%" stop-color="#0d0a18" />
         </linearGradient>
       </defs>
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
-      <text x="80" y="48" fill="#fff1d6" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
-      <text x="80" y="74" fill="#b69774" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(subtitle)}</text>
+      <text x="80" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
+      <text x="80" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(subtitle)}</text>
       ${paths}
     </svg>`;
 }
@@ -688,6 +688,40 @@ function FitText({
 /* ─────────── React components ─────────── */
 
 type WindowKey = "input" | "runState" | "analysis" | "schema" | "rules";
+
+function AnimatedWindow({
+  show,
+  className = "",
+  children,
+  duration = 350,
+}: {
+  show: boolean;
+  className?: string;
+  children: React.ReactNode;
+  duration?: number;
+}) {
+  const [mounted, setMounted] = useState(show);
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    if (show) {
+      setClosing(false);
+      setMounted(true);
+    } else {
+      setClosing(true);
+      const timer = setTimeout(() => setMounted(false), duration);
+      return () => clearTimeout(timer);
+    }
+  }, [show, duration]);
+
+  if (!mounted) return null;
+
+  return (
+    <div className={`${className} ${closing ? "is-closing" : ""}`}>
+      {children}
+    </div>
+  );
+}
 
 function Chrome({ onClose }: { onClose?: () => void }) {
   return (
@@ -860,14 +894,14 @@ function ScatterChart({ scatter }: { scatter: ScatterSeries }) {
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${scatter.key} scatter`}>
-      <text x={left} y={top - 2} fill="#b69774" fontSize="12" fontFamily="ui-monospace, monospace">
+      <text x={left} y={top - 2} fill="#9b92c4" fontSize="12" fontFamily="ui-monospace, monospace">
         {scatter.yKey}
       </text>
-      <text x={width - right} y={height - 8} textAnchor="end" fill="#b69774" fontSize="12" fontFamily="ui-monospace, monospace">
+      <text x={width - right} y={height - 8} textAnchor="end" fill="#9b92c4" fontSize="12" fontFamily="ui-monospace, monospace">
         {scatter.xKey}
       </text>
-      <line x1={left} y1={top + innerHeight} x2={width - right} y2={top + innerHeight} stroke="#4b3a30" strokeWidth="1.5" />
-      <line x1={left} y1={top} x2={left} y2={top + innerHeight} stroke="#4b3a30" strokeWidth="1.5" />
+      <line x1={left} y1={top + innerHeight} x2={width - right} y2={top + innerHeight} stroke="#3a3050" strokeWidth="1.5" />
+      <line x1={left} y1={top} x2={left} y2={top + innerHeight} stroke="#3a3050" strokeWidth="1.5" />
       {points.map((p, i) => (
         <circle className="scatter-point" key={i} cx={p.x} cy={p.y} r="3.5" fill={scatter.color} opacity="0.85" />
       ))}
@@ -890,7 +924,7 @@ function InteractiveClusterChart({
   const [filter, setFilter] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const colors = ["#ffda7b", "#ff8c6a", "#f45d96", "#7ad7ff", "#8ef0b5", "#c8a4ff", "#ffb3c1", "#a0c4ff"];
+  const colors = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
   const clusterLabels = Array.from(new Set(points.map((p) => p.label))).sort((a, b) => a - b);
 
   const width = 960;
@@ -977,9 +1011,9 @@ function InteractiveClusterChart({
             <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "100%" }}>
               <defs>
                 <linearGradient id="bgGradient" x1="0" x2="1" y1="0" y2="1">
-                  <stop offset="0%" stop-color="#1a1310" />
-                  <stop offset="50%" stop-color="#241916" />
-                  <stop offset="100%" stop-color="#131114" />
+                  <stop offset="0%" stop-color="#0f0c1a" />
+                  <stop offset="50%" stop-color="#1a1430" />
+                  <stop offset="100%" stop-color="#0d0a18" />
                 </linearGradient>
               </defs>
               <rect width={width} height={height} rx={34} fill="url(#bgGradient)" />
@@ -990,7 +1024,7 @@ function InteractiveClusterChart({
                   y1={top}
                   x2={left + (innerWidth * i) / 9}
                   y2={top + innerHeight}
-                  stroke="#3b322c"
+                  stroke="#2d2640"
                   strokeWidth="1"
                   strokeDasharray="4 6"
                   opacity={0.5}
@@ -1003,7 +1037,7 @@ function InteractiveClusterChart({
                   y1={top + (innerHeight * i) / 7}
                   x2={left + innerWidth}
                   y2={top + (innerHeight * i) / 7}
-                  stroke="#3b322c"
+                  stroke="#2d2640"
                   strokeWidth="1"
                   strokeDasharray="4 6"
                   opacity={0.5}
@@ -1088,14 +1122,14 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
     if (v >= 0) {
-      const r = Math.round(26 + t * (255 - 26));
-      const g = Math.round(19 + t * (218 - 19));
-      const b = Math.round(16 + t * (123 - 16));
+      const r = Math.round(34 + t * (59 - 34));
+      const g = Math.round(211 + t * (130 - 211));
+      const b = Math.round(238 + t * (246 - 238));
       return `rgb(${r},${g},${b})`;
     }
-    const r = Math.round(26 + t * (244 - 26));
-    const g = Math.round(19 + t * (93 - 19));
-    const b = Math.round(16 + t * (150 - 16));
+    const r = Math.round(244 + t * (167 - 244));
+    const g = Math.round(114 + t * (139 - 114));
+    const b = Math.round(182 + t * (250 - 182));
     return `rgb(${r},${g},${b})`;
   };
 
@@ -1103,10 +1137,10 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="correlation heatmap">
       {keys.map((key, i) => (
         <g key={`label-${key}`}>
-          <text x={100 + i * cellSize + cellSize / 2} y={90} textAnchor="middle" fill="#b69774" fontSize={labelFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize} lengthAdjust="spacingAndGlyphs">
+          <text x={100 + i * cellSize + cellSize / 2} y={90} textAnchor="middle" fill="#9b92c4" fontSize={labelFontSize} fontFamily="ui-monospace, monospace">
             {key}
           </text>
-          <text x={90} y={100 + i * cellSize + cellSize / 2 + 4} textAnchor="end" fill="#b69774" fontSize={labelFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize} lengthAdjust="spacingAndGlyphs">
+          <text x={90} y={100 + i * cellSize + cellSize / 2 + 4} textAnchor="end" fill="#9b92c4" fontSize={labelFontSize} fontFamily="ui-monospace, monospace">
             {key}
           </text>
         </g>
@@ -1120,7 +1154,7 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
           return (
             <g key={`${ki}-${kj}`}>
               <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
-              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize={valueFontSize} fontFamily="ui-monospace, monospace" textLength={cellSize - 4} lengthAdjust="spacingAndGlyphs">
+              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize={valueFontSize} fontFamily="ui-monospace, monospace">
                 {value.toFixed(2)}
               </text>
             </g>
@@ -1190,14 +1224,14 @@ function DonutChart({ bars, samples }: { bars: HistogramBar[]; samples?: Map<str
               y1={cy + radius * Math.sin(s.midAngle)}
               x2={s.lx}
               y2={s.ly}
-              stroke="#4b3a30"
+              stroke="#3a3050"
               strokeWidth="1"
             />
             <text
               x={s.lx + (Math.cos(s.midAngle) > 0 ? 6 : -6)}
               y={s.ly + 4}
               textAnchor={Math.cos(s.midAngle) > 0 ? "start" : "end"}
-              fill="#b69774"
+              fill="#9b92c4"
               fontSize="11"
               fontFamily="ui-monospace, monospace"
             >
@@ -1205,7 +1239,7 @@ function DonutChart({ bars, samples }: { bars: HistogramBar[]; samples?: Map<str
             </text>
           </g>
         ))}
-        <text x={cx} y={cy + 5} textAnchor="middle" fill="#fff1d6" fontSize="18" fontFamily="ui-monospace, monospace">
+        <text x={cx} y={cy + 5} textAnchor="middle" fill="#f0eaff" fontSize="18" fontFamily="ui-monospace, monospace">
           {bars.length} classes
         </text>
       </svg>
@@ -1522,8 +1556,7 @@ export default function Home() {
       </section>
 
       <section className="workspace">
-        {windows.input && (
-          <div className="window animate-fade-in-up stagger-1">
+        <AnimatedWindow show={windows.input} className="window animate-fade-in-up stagger-1">
             <Chrome onClose={() => toggleWindow("input")} />
             <div className="window-head">
               <div>
@@ -1547,11 +1580,9 @@ export default function Home() {
                 Run analysis
               </button>
             </div>
-          </div>
-        )}
+        </AnimatedWindow>
 
-        {windows.runState && (
-          <div className="window animate-fade-in-up stagger-2">
+        <AnimatedWindow show={windows.runState} className="window animate-fade-in-up stagger-2">
             <Chrome onClose={() => toggleWindow("runState")} />
             <div className="window-head">
               <div>
@@ -1581,13 +1612,11 @@ export default function Home() {
                 <strong><FitText minFontSize={14}>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</FitText></strong>
               </div>
             </div>
-          </div>
-        )}
+        </AnimatedWindow>
       </section>
 
-      {windows.analysis && (
-        <section className="result-stage animate-fade-in-up">
-          <div className="window">
+      <AnimatedWindow show={windows.analysis} className="result-stage animate-fade-in-up">
+        <div className="window">
             <Chrome onClose={() => toggleWindow("analysis")} />
             <div className="window-head">
               <div>
@@ -1616,9 +1645,8 @@ export default function Home() {
             ) : (
               <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
             )}
-          </div>
-        </section>
-      )}
+        </div>
+      </AnimatedWindow>
 
       {/* Dynamic visualization grid */}
       <section className="viz-grid">
@@ -1669,9 +1697,8 @@ export default function Home() {
         )}
       </section>
 
-      {windows.schema && analytics.fieldSchemas.length > 0 && (
-        <section className="stats-section animate-fade-in-up">
-          <div className="window">
+      <AnimatedWindow show={windows.schema && analytics.fieldSchemas.length > 0} className="stats-section animate-fade-in-up">
+        <div className="window">
             <Chrome onClose={() => toggleWindow("schema")} />
             <div className="window-head">
               <div>
@@ -1680,13 +1707,11 @@ export default function Home() {
               </div>
             </div>
             <StatsGrid schemas={analytics.fieldSchemas} />
-          </div>
-        </section>
-      )}
+        </div>
+      </AnimatedWindow>
 
-      {windows.rules && insights.length > 0 && (
-        <section className="stats-section animate-fade-in-up">
-          <div className="window">
+      <AnimatedWindow show={windows.rules && insights.length > 0} className="stats-section animate-fade-in-up">
+        <div className="window">
             <Chrome onClose={() => toggleWindow("rules")} />
             <div className="window-head">
               <div>
@@ -1702,9 +1727,8 @@ export default function Home() {
                 </article>
               ))}
             </div>
-          </div>
-        </section>
-      )}
+        </div>
+      </AnimatedWindow>
 
       <Dock windows={windows} onToggle={toggleWindow} />
     </main>

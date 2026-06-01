@@ -82,7 +82,7 @@ export type ParsedLogDataset = {
   timestampKey: string;
 };
 
-const PALETTE = ["#ffda7b", "#ff8c6a", "#f45d96", "#7ad7ff", "#8ef0b5", "#c8a4ff", "#ffb3c1", "#a0c4ff"];
+const PALETTE = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
 
 function isNumericLike(value: string) {
   return /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()) || /^0x[0-9a-f]+$/i.test(value.trim());
