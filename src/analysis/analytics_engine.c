@@ -646,11 +646,25 @@ static void logana_compute_summary(logana_job_t *job) {
     double t_mean = 0.0;
     if (has_real_ts) {
         double t_sum = 0.0;
-        for (size_t r = 0; r < rows; ++r) t_sum += (double)job->matrix.timestamps[r];
+        for (size_t r = 0; r < rows; ++r) t_sum += ((double)job->matrix.timestamps[r] - (double)min_ts) / 1000.0;
         t_mean = t_sum / (double)rows;
     } else {
         t_mean = ((double)rows - 1.0) / 2.0;
     }
+
+    /* Pre-compute primary dimension range for adaptive entropy binning */
+    double primary_min = INFINITY;
+    double primary_max = -INFINITY;
+    for (size_t r = 0; r < rows; ++r) {
+        bool primary_valid = (!job->matrix.valid_mask || job->matrix.valid_mask[r * dims]);
+        double primary = job->matrix.values[r * dims];
+        if (primary_valid && isfinite(primary)) {
+            if (primary < primary_min) primary_min = primary;
+            if (primary > primary_max) primary_max = primary;
+        }
+    }
+    double primary_range = (primary_max > primary_min && isfinite(primary_max - primary_min))
+                           ? (primary_max - primary_min) : 1.0;
 
     double slope_num = 0.0;
     double slope_den = 0.0;
@@ -658,10 +672,15 @@ static void logana_compute_summary(logana_job_t *job) {
     for (size_t r = 0; r < rows; ++r) {
         bool primary_valid = (!job->matrix.valid_mask || job->matrix.valid_mask[r * dims]);
         double primary = job->matrix.values[r * dims];
-        double bucket = fmin(31.0, fmax(0.0, floor(fabs(primary))));
-        if (primary_valid) entropy_hist[(size_t)bucket] += 1.0;
+        if (primary_valid && isfinite(primary)) {
+            double bucket = 31.0 * (primary - primary_min) / primary_range;
+            bucket = fmin(31.0, fmax(0.0, floor(bucket)));
+            entropy_hist[(size_t)bucket] += 1.0;
+        }
 
-        double t = has_real_ts ? (double)job->matrix.timestamps[r] : (double)r;
+        double t = has_real_ts
+            ? ((double)job->matrix.timestamps[r] - (double)min_ts) / 1000.0
+            : (double)r;
         double dt = t - t_mean;
         if (primary_valid) {
             slope_num += dt * primary;

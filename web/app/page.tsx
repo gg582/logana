@@ -1157,6 +1157,12 @@ export default function Home() {
     return items;
   }, [result, analytics.fieldSchemas]);
 
+  useEffect(() => {
+    const id = setTimeout(() => submit(), 200);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function submit() {
     setStatus("submitting");
     setResult(null);
