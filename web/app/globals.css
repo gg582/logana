@@ -337,6 +337,14 @@ body {
   transform: translateY(-1px);
 }
 
+.textarea.is-dragging {
+  border-color: rgba(139, 92, 246, 0.60);
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15), 0 12px 40px rgba(139, 92, 246, 0.15);
+  background:
+    linear-gradient(180deg, rgba(139, 92, 246, 0.06), transparent),
+    rgba(12, 8, 20, 0.92);
+}
+
 /* ─────────── Controls / Buttons ─────────── */
 .controls {
   display: flex;

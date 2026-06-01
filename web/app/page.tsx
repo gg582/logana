@@ -1404,6 +1404,7 @@ export default function Home() {
   const [algorithm, setAlgorithm] = useState("auto");
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [windows, setWindows] = useState<Record<WindowKey, boolean>>({
     input: true,
     runState: true,
@@ -1480,7 +1481,8 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function submit() {
+  async function submit(overridePayload?: string) {
+    const activePayload = overridePayload ?? payload;
     setStatus("submitting");
     setResult(null);
 
@@ -1491,7 +1493,7 @@ export default function Home() {
           const res = await fetch("/api/ingest", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ payload, algorithm: algo }),
+            body: JSON.stringify({ payload: activePayload, algorithm: algo }),
           }).then((r) => r.json());
           return { algo, jobId: res.jobId as string | undefined, error: res.error as string | undefined };
         })
@@ -1542,7 +1544,7 @@ export default function Home() {
     const ingest = await fetch("/api/ingest", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ payload, algorithm }),
+      body: JSON.stringify({ payload: activePayload, algorithm }),
     }).then((r) => r.json());
     if (!ingest.jobId) {
       setStatus(ingest.error ?? "submit failed");
@@ -1636,7 +1638,31 @@ export default function Home() {
                 <p>Paste newline-delimited JSON with nested objects, key-values, or plain text.</p>
               </div>
             </div>
-            <textarea className="textarea" value={payload} onChange={(e) => setPayload(e.target.value)} />
+            <textarea
+              className={`textarea ${isDragging ? "is-dragging" : ""}`}
+              value={payload}
+              onChange={(e) => setPayload(e.target.value)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                  const text = event.target?.result as string;
+                  if (text) {
+                    setPayload(text);
+                    submit(text);
+                  }
+                };
+                reader.readAsText(file);
+              }}
+            />
             <div className="controls">
               <select className="select" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
                 <option value="auto">Auto (all algorithms)</option>
@@ -1648,7 +1674,7 @@ export default function Home() {
                 <option value="gmm">GMM</option>
                 <option value="agglomerative">Agglomerative</option>
               </select>
-              <button className="button" onClick={submit}>
+              <button className="button" onClick={() => submit()}>
                 Run analysis
               </button>
             </div>
