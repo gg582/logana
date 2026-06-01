@@ -92,7 +92,7 @@ typedef struct {
 } logana_analysis_summary_t;
 
 typedef struct {
-    float *values;
+    double *values;
     uint64_t *timestamps;        /* Normalized epoch milliseconds per row */
     uint8_t *valid_mask;         /* Per-dimension validity: 1 = valid, 0 = invalid/parsed trap */
     uint8_t *formats;            /* Per-row format tag: 0=JSON, 1=KV, 2=Text */

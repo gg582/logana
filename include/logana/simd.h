@@ -42,4 +42,12 @@ static inline double logana_simd_sum_f32(const float *values, size_t len) {
     return total;
 }
 
+static inline double logana_simd_sum_f64(const double *values, size_t len) {
+    double total = 0.0;
+    for (size_t i = 0; i < len; ++i) {
+        total += values[i];
+    }
+    return total;
+}
+
 #endif
