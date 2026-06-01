@@ -164,6 +164,7 @@ typedef struct logana_engine {
     pthread_t render_dispatcher_thread;
     bool shutting_down;
     pthread_mutex_t jobs_lock;
+    pthread_mutex_t analysis_mutex;
     logana_job_t *jobs[LOGANA_MAX_JOBS];
     size_t job_count;
     uint64_t next_job_id;
