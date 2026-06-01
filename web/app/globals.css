@@ -204,6 +204,62 @@ body {
   pointer-events: none;
 }
 
+@keyframes windowShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3px) rotate(-0.4deg); }
+  40% { transform: translateX(3px) rotate(0.4deg); }
+  60% { transform: translateX(-2px) rotate(-0.2deg); }
+  80% { transform: translateX(2px) rotate(0.2deg); }
+}
+
+.window.is-shaking {
+  animation: windowShake 0.35s ease-in-out;
+}
+
+.window.is-minimized {
+  height: auto !important;
+  min-height: unset;
+  max-height: 140px;
+  overflow: hidden;
+}
+
+.window.is-minimized .window-body-wrap {
+  display: none;
+}
+
+.window.is-minimized .window-minimized-head {
+  display: block;
+  padding: 10px 0 14px;
+}
+
+.window.is-minimized .window-minimized-head .window-head {
+  margin-bottom: 0;
+}
+
+.window.is-minimized .window-minimized-head .window-head p {
+  display: none;
+}
+
+.window.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  border-radius: 0;
+  width: 100vw !important;
+  max-width: none !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  transform: none !important;
+  grid-column: 1 / -1 !important;
+}
+
+.window.is-fullscreen .window-body-wrap {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .chrome {
   display: flex;
   gap: 8px;
@@ -220,6 +276,11 @@ body {
 
 .dot:hover {
   transform: scale(1.4);
+}
+
+.dot:active {
+  transform: scale(0.78);
+  transition: transform 0.08s ease;
 }
 
 .dot-red   { background: #ff5f57; }

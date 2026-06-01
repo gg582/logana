@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   parseLogStream,
   type HistogramBar,
@@ -723,7 +723,15 @@ function AnimatedWindow({
   );
 }
 
-function Chrome({ onClose }: { onClose?: () => void }) {
+function Chrome({
+  onClose,
+  onMinimize,
+  onFullscreen,
+}: {
+  onClose?: () => void;
+  onMinimize?: () => void;
+  onFullscreen?: () => void;
+}) {
   return (
     <div className="chrome">
       <span
@@ -732,9 +740,74 @@ function Chrome({ onClose }: { onClose?: () => void }) {
         style={{ cursor: onClose ? "pointer" : "default" }}
         title={onClose ? "Close" : undefined}
       />
-      <span className="dot dot-yellow" />
-      <span className="dot dot-green" />
+      <span
+        className="dot dot-yellow"
+        onClick={onMinimize}
+        style={{ cursor: onMinimize ? "pointer" : "default" }}
+        title={onMinimize ? "Minimize" : undefined}
+      />
+      <span
+        className="dot dot-green"
+        onClick={onFullscreen}
+        style={{ cursor: onFullscreen ? "pointer" : "default" }}
+        title={onFullscreen ? "Fullscreen" : undefined}
+      />
     </div>
+  );
+}
+
+function WindowShell({
+  show,
+  onClose,
+  className = "window",
+  children,
+}: {
+  show: boolean;
+  onClose: () => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const [minimized, setMinimized] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [shaking, setShaking] = useState(false);
+
+  const shake = () => {
+    setShaking(true);
+    setTimeout(() => setShaking(false), 350);
+  };
+
+  const handleClose = () => {
+    shake();
+    onClose();
+  };
+
+  const childArray = useMemo(() => Children.toArray(children), [children]);
+  const headChild = childArray.find(
+    (c) => isValidElement(c) && String((c as any).props.className).includes("window-head"),
+  );
+
+  return (
+    <AnimatedWindow
+      show={show}
+      className={`${className} ${shaking ? "is-shaking" : ""} ${minimized ? "is-minimized" : ""} ${fullscreen ? "is-fullscreen" : ""}`}
+    >
+      <Chrome
+        onClose={handleClose}
+        onMinimize={() => {
+          shake();
+          setMinimized((v) => !v);
+        }}
+        onFullscreen={() => {
+          shake();
+          setFullscreen((v) => !v);
+        }}
+      />
+      {minimized ? (
+        <div className="window-minimized-head">{headChild}</div>
+      ) : (
+        <div className="window-body-wrap">{children}</div>
+      )}
+    </AnimatedWindow>
   );
 }
 
@@ -1556,8 +1629,7 @@ export default function Home() {
       </section>
 
       <section className="workspace">
-        <AnimatedWindow show={windows.input} className="window animate-fade-in-up stagger-1">
-            <Chrome onClose={() => toggleWindow("input")} />
+        <WindowShell show={windows.input} onClose={() => toggleWindow("input")} className="window animate-fade-in-up stagger-1">
             <div className="window-head">
               <div>
                 <h2>Input stream</h2>
@@ -1580,10 +1652,9 @@ export default function Home() {
                 Run analysis
               </button>
             </div>
-        </AnimatedWindow>
+        </WindowShell>
 
-        <AnimatedWindow show={windows.runState} className="window animate-fade-in-up stagger-2">
-            <Chrome onClose={() => toggleWindow("runState")} />
+        <WindowShell show={windows.runState} onClose={() => toggleWindow("runState")} className="window animate-fade-in-up stagger-2">
             <div className="window-head">
               <div>
                 <h2>Run state</h2>
@@ -1612,41 +1683,38 @@ export default function Home() {
                 <strong><FitText minFontSize={14}>{typeof result?.trendSlope === "number" ? result.trendSlope.toFixed(3) : "-"}</FitText></strong>
               </div>
             </div>
-        </AnimatedWindow>
+        </WindowShell>
       </section>
 
-      <AnimatedWindow show={windows.analysis} className="result-stage animate-fade-in-up">
-        <div className="window">
-            <Chrome onClose={() => toggleWindow("analysis")} />
-            <div className="window-head">
-              <div>
-                <h2>Analysis output</h2>
-                <p>The backend engine render stays intact. Export the rendered preview as PNG.</p>
-              </div>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                {result?.jobId ? (
-                  <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
-                    Open report
-                  </a>
-                ) : null}
-                {engineSvgMarkup ? (
-                  <button className="ghost-button" onClick={() => downloadSvgAsPng(engineSvgMarkup, "engine-analysis-preview")}>
-                    Download PNG
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            {result?.points && result.points.length > 0 ? (
-              <InteractiveClusterChart
-                points={result.points}
-                svgMarkup={result.svg}
-                algorithm={result.algorithm}
-              />
-            ) : (
-              <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
-            )}
+      <WindowShell show={windows.analysis} onClose={() => toggleWindow("analysis")} className="result-stage animate-fade-in-up window">
+        <div className="window-head">
+          <div>
+            <h2>Analysis output</h2>
+            <p>The backend engine render stays intact. Export the rendered preview as PNG.</p>
+          </div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            {result?.jobId ? (
+              <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
+                Open report
+              </a>
+            ) : null}
+            {engineSvgMarkup ? (
+              <button className="ghost-button" onClick={() => downloadSvgAsPng(engineSvgMarkup, "engine-analysis-preview")}>
+                Download PNG
+              </button>
+            ) : null}
+          </div>
         </div>
-      </AnimatedWindow>
+        {result?.points && result.points.length > 0 ? (
+          <InteractiveClusterChart
+            points={result.points}
+            svgMarkup={result.svg}
+            algorithm={result.algorithm}
+          />
+        ) : (
+          <div className="preview preview-large" dangerouslySetInnerHTML={{ __html: result?.html ?? "" }} />
+        )}
+      </WindowShell>
 
       {/* Dynamic visualization grid */}
       <section className="viz-grid">
@@ -1697,38 +1765,36 @@ export default function Home() {
         )}
       </section>
 
-      <AnimatedWindow show={windows.schema && analytics.fieldSchemas.length > 0} className="stats-section animate-fade-in-up">
-        <div className="window">
-            <Chrome onClose={() => toggleWindow("schema")} />
-            <div className="window-head">
-              <div>
-                <h2>Inferred schema</h2>
-                <p>Auto-detected field types, ranges, and cardinalities from the stream.</p>
-              </div>
+      {analytics.fieldSchemas.length > 0 && (
+        <WindowShell show={windows.schema} onClose={() => toggleWindow("schema")} className="stats-section animate-fade-in-up window">
+          <div className="window-head">
+            <div>
+              <h2>Inferred schema</h2>
+              <p>Auto-detected field types, ranges, and cardinalities from the stream.</p>
             </div>
-            <StatsGrid schemas={analytics.fieldSchemas} />
-        </div>
-      </AnimatedWindow>
+          </div>
+          <StatsGrid schemas={analytics.fieldSchemas} />
+        </WindowShell>
+      )}
 
-      <AnimatedWindow show={windows.rules && insights.length > 0} className="stats-section animate-fade-in-up">
-        <div className="window">
-            <Chrome onClose={() => toggleWindow("rules")} />
-            <div className="window-head">
-              <div>
-                <h2>Detected rules</h2>
-                <p>Heuristics inferred from the analyzed payload.</p>
-              </div>
+      {insights.length > 0 && (
+        <WindowShell show={windows.rules} onClose={() => toggleWindow("rules")} className="stats-section animate-fade-in-up window">
+          <div className="window-head">
+            <div>
+              <h2>Detected rules</h2>
+              <p>Heuristics inferred from the analyzed payload.</p>
             </div>
-            <div className="rules-grid">
-              {insights.map((item) => (
-                <article key={item.title} className={`rules-card rules-card-${item.tone}`}>
-                  <h4>{item.title}</h4>
-                  <p>{item.detail}</p>
-                </article>
-              ))}
-            </div>
-        </div>
-      </AnimatedWindow>
+          </div>
+          <div className="rules-grid">
+            {insights.map((item) => (
+              <article key={item.title} className={`rules-card rules-card-${item.tone}`}>
+                <h4>{item.title}</h4>
+                <p>{item.detail}</p>
+              </article>
+            ))}
+          </div>
+        </WindowShell>
+      )}
 
       <Dock windows={windows} onToggle={toggleWindow} />
     </main>
