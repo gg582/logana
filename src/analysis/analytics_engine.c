@@ -23,6 +23,17 @@ static void logana_set_job_status(logana_job_t *job, logana_job_status_t status,
     pthread_mutex_unlock(&job->lock);
 }
 
+void logana_job_ref(logana_job_t *job) {
+    if (job) __atomic_fetch_add(&job->ref_count, 1, __ATOMIC_RELAXED);
+}
+
+void logana_job_unref(logana_job_t *job) {
+    if (!job) return;
+    if (__atomic_fetch_sub(&job->ref_count, 1, __ATOMIC_ACQ_REL) == 1) {
+        logana_job_destroy(job);
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Auto cache (retained for compatibility but no longer drives selection)   */
 /* -------------------------------------------------------------------------- */
@@ -102,11 +113,14 @@ static void logana_register_job(logana_engine_t *engine, logana_job_t *job) {
             bool done = (j->status == LOGANA_JOB_READY || j->status == LOGANA_JOB_FAILED);
             pthread_mutex_unlock(&j->lock);
             if (done) {
-                logana_job_destroy(j);
-                memmove(&engine->jobs[i], &engine->jobs[i + 1],
-                        (engine->job_count - i - 1) * sizeof(logana_job_t *));
-                engine->job_count--;
-                break;
+                size_t refs = __atomic_load_n(&j->ref_count, __ATOMIC_ACQUIRE);
+                if (refs == 1) {
+                    memmove(&engine->jobs[i], &engine->jobs[i + 1],
+                            (engine->job_count - i - 1) * sizeof(logana_job_t *));
+                    engine->job_count--;
+                    logana_job_unref(j);
+                    break;
+                }
             }
         }
     }
@@ -120,8 +134,10 @@ logana_job_t *logana_engine_find_job(logana_engine_t *engine, uint64_t job_id) {
     pthread_mutex_lock(&engine->jobs_lock);
     for (size_t i = 0; i < engine->job_count; ++i) {
         if (engine->jobs[i] && engine->jobs[i]->job_id == job_id) {
+            logana_job_t *job = engine->jobs[i];
+            logana_job_ref(job);
             pthread_mutex_unlock(&engine->jobs_lock);
-            return engine->jobs[i];
+            return job;
         }
     }
     pthread_mutex_unlock(&engine->jobs_lock);
@@ -163,6 +179,7 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
     job->algorithm = algorithm;
     job->created_ms = logana_now_ms();
     job->updated_ms = job->created_ms;
+    job->ref_count = 1;
     job->status = LOGANA_JOB_QUEUED;
     logana_register_job(engine, job);
     if (!logana_queue_push(&engine->ingress_queue, job, 100)) {
@@ -196,7 +213,7 @@ void logana_engine_shutdown(logana_engine_t *engine) {
     pthread_join(engine->render_dispatcher_thread, NULL);
     if (engine->analysis_pool) ttak_thread_pool_destroy(engine->analysis_pool);
     if (engine->render_pool) ttak_thread_pool_destroy(engine->render_pool);
-    for (size_t i = 0; i < engine->job_count; ++i) logana_job_destroy(engine->jobs[i]);
+    for (size_t i = 0; i < engine->job_count; ++i) logana_job_unref(engine->jobs[i]);
     logana_queue_destroy(&engine->ingress_queue);
     logana_queue_destroy(&engine->render_queue);
     pthread_mutex_destroy(&engine->jobs_lock);

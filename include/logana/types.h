@@ -116,6 +116,7 @@ typedef struct {
 typedef struct logana_job {
     uint64_t job_id;
     pthread_mutex_t lock;
+    _Atomic size_t ref_count;
     logana_job_status_t status;
     uint64_t created_ms;
     uint64_t updated_ms;

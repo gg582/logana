@@ -12,5 +12,7 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
 logana_job_t *logana_engine_find_job(logana_engine_t *engine, uint64_t job_id);
 int logana_analyze_job(logana_engine_t *engine, logana_job_t *job);
 void logana_job_destroy(logana_job_t *job);
+void logana_job_ref(logana_job_t *job);
+void logana_job_unref(logana_job_t *job);
 
 #endif

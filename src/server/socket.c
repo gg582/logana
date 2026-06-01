@@ -119,7 +119,9 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)job->job_id);
     cJSON_AddStringToObject(json, "jobId", job_id);
+    pthread_mutex_lock(&job->lock);
     cJSON_AddStringToObject(json, "status", logana_status_name(job->status));
+    pthread_mutex_unlock(&job->lock);
     char *rendered = cJSON_PrintUnformatted(json);
     cJSON_Delete(json);
     logana_send_json(res, CWIST_HTTP_OK, rendered);
@@ -159,6 +161,7 @@ static void logana_handle_status(cwist_http_request *req, cwist_http_response *r
     logana_job_t *job = logana_require_job(logana_extract_job_id_from_path(path, "/status", raw_id, sizeof(raw_id)), res);
     if (!job) return;
     logana_send_json(res, CWIST_HTTP_OK, logana_job_status_json(job));
+    logana_job_unref(job);
 }
 
 static void logana_handle_result(cwist_http_request *req, cwist_http_response *res) {
@@ -167,6 +170,7 @@ static void logana_handle_result(cwist_http_request *req, cwist_http_response *r
     logana_job_t *job = logana_require_job(logana_extract_job_id_from_path(path, "", raw_id, sizeof(raw_id)), res);
     if (!job) return;
     logana_send_json(res, CWIST_HTTP_OK, logana_job_result_json(job));
+    logana_job_unref(job);
 }
 
 static void logana_handle_report(cwist_http_request *req, cwist_http_response *res) {
@@ -177,10 +181,12 @@ static void logana_handle_report(cwist_http_request *req, cwist_http_response *r
     char *html = logana_job_report_page(job);
     if (!html) {
         logana_send_error(res, CWIST_HTTP_INTERNAL_ERROR, "report render failed");
+        logana_job_unref(job);
         return;
     }
     logana_set_response(res, CWIST_HTTP_OK, "text/html; charset=utf-8", html);
     free(html);
+    logana_job_unref(job);
 }
 
 static void logana_handle_root(cwist_http_request *req, cwist_http_response *res) {
