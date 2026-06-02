@@ -104,7 +104,10 @@ void *logana_analyze_batch_task(void *arg) {
                 job->status = LOGANA_JOB_FAILED;
                 snprintf(job->error, sizeof(job->error), "%s", "render queue is saturated");
                 pthread_mutex_unlock(&job->lock);
+                logana_job_unref(job);
             }
+        } else {
+            logana_job_unref(job);
         }
     }
     free(batch->jobs);
@@ -118,10 +121,14 @@ void *logana_aggregator_main(void *arg) {
         logana_job_t *first = NULL;
         if (!logana_queue_pop(&engine->ingress_queue, (void **)&first, 100)) continue;
         logana_batch_t *batch = calloc(1, sizeof(*batch));
-        if (!batch) continue;
+        if (!batch) {
+            logana_job_unref(first);
+            continue;
+        }
         batch->engine = engine;
         batch->jobs = calloc(LOGANA_MAX_BATCH_JOBS, sizeof(logana_job_t *));
         if (!batch->jobs) {
+            logana_job_unref(first);
             free(batch);
             continue;
         }
@@ -152,6 +159,7 @@ void *logana_aggregator_main(void *arg) {
                 batch->jobs[i]->status = LOGANA_JOB_FAILED;
                 snprintf(batch->jobs[i]->error, sizeof(batch->jobs[i]->error), "%s", "failed to schedule analysis task");
                 pthread_mutex_unlock(&batch->jobs[i]->lock);
+                logana_job_unref(batch->jobs[i]);
             }
             free(batch->jobs);
             free(batch);

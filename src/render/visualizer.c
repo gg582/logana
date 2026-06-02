@@ -408,7 +408,6 @@ int logana_render_job(logana_engine_t *engine, logana_job_t *job) {
     pthread_mutex_lock(&job->lock);
     free(job->svg);
     job->svg = svg;
-    job->status = LOGANA_JOB_READY;
     job->updated_ms = logana_now_ms();
     pthread_mutex_unlock(&job->lock);
 
@@ -424,6 +423,8 @@ int logana_render_job(logana_engine_t *engine, logana_job_t *job) {
     pthread_mutex_lock(&job->lock);
     free(job->html);
     job->html = html;
+    job->status = LOGANA_JOB_READY;
+    job->updated_ms = logana_now_ms();
     pthread_mutex_unlock(&job->lock);
     return 0;
 }
@@ -434,6 +435,7 @@ static void *logana_render_job_exec(void *arg) {
         logana_job_t *job;
     } *ctx = arg;
     logana_render_job(ctx->engine, ctx->job);
+    logana_job_unref(ctx->job);
     free(ctx);
     return NULL;
 }
@@ -448,12 +450,16 @@ void *logana_render_dispatcher_main(void *arg) {
             logana_engine_t *engine;
             logana_job_t *job;
         } *ctx = calloc(1, sizeof(*ctx));
-        if (!ctx) continue;
+        if (!ctx) {
+            logana_job_unref(job);
+            continue;
+        }
         ctx->engine = engine;
         ctx->job = job;
         ttak_task_t *task = ttak_task_create(logana_render_job_exec, ctx, NULL, now);
         if (!task) {
             free(ctx);
+            logana_job_unref(job);
             continue;
         }
         ttak_task_set_domain(task, TTAK_TASK_DOMAIN_IO);
@@ -462,6 +468,7 @@ void *logana_render_dispatcher_main(void *arg) {
         if (!ttak_thread_pool_schedule_task(engine->render_pool, task, 2, now)) {
             ttak_task_destroy(task, now);
             free(ctx);
+            logana_job_unref(job);
         }
     }
     return NULL;

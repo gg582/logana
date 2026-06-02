@@ -32,20 +32,33 @@ static const char *logana_http_status_text(cwist_http_status_t status) {
     }
 }
 
+static void logana_free_response_body(const void *ptr, size_t len, void *ctx) {
+    (void)len;
+    (void)ctx;
+    free((void *)ptr);
+}
+
 static void logana_set_response(cwist_http_response *res, cwist_http_status_t status, const char *content_type, const char *body) {
     res->status_code = status;
     cwist_sstring_assign(res->status_text, (char *)logana_http_status_text(status));
     cwist_http_header_add(&res->headers, "Content-Type", content_type);
-    cwist_sstring_assign(res->body, (char *)(body ? body : ""));
+    cwist_sstring_assign_len(res->body, body ? body : "", body ? strlen(body) : 0);
 }
 
-static void logana_send_json(cwist_http_response *res, cwist_http_status_t status, char *json) {
-    if (!json) {
+static void logana_set_owned_response(cwist_http_response *res, cwist_http_status_t status, const char *content_type, char *body) {
+    if (!body) {
         logana_set_response(res, CWIST_HTTP_INTERNAL_ERROR, "application/json", "{\"error\":\"response encode failed\"}");
         return;
     }
-    logana_set_response(res, status, "application/json", json);
-    free(json);
+
+    res->status_code = status;
+    cwist_sstring_assign(res->status_text, (char *)logana_http_status_text(status));
+    cwist_http_header_add(&res->headers, "Content-Type", content_type);
+    cwist_http_response_set_body_ptr_managed(res, body, strlen(body), logana_free_response_body, NULL);
+}
+
+static void logana_send_json(cwist_http_response *res, cwist_http_status_t status, char *json) {
+    logana_set_owned_response(res, status, "application/json", json);
 }
 
 static void logana_send_error(cwist_http_response *res, cwist_http_status_t status, const char *message) {
@@ -84,7 +97,7 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
         return;
     }
 
-    cJSON *body = cJSON_Parse(req->body->data);
+    cJSON *body = cJSON_ParseWithLength(req->body->data, req->body->size);
     if (!body || !cJSON_IsObject(body)) {
         if (body) cJSON_Delete(body);
         logana_send_error(res, CWIST_HTTP_BAD_REQUEST, "invalid json body");
@@ -184,8 +197,7 @@ static void logana_handle_report(cwist_http_request *req, cwist_http_response *r
         logana_job_unref(job);
         return;
     }
-    logana_set_response(res, CWIST_HTTP_OK, "text/html; charset=utf-8", html);
-    free(html);
+    logana_set_owned_response(res, CWIST_HTTP_OK, "text/html; charset=utf-8", html);
     logana_job_unref(job);
 }
 

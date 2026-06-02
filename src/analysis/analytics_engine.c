@@ -106,7 +106,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
 /* Engine lifecycle                                                           */
 /* -------------------------------------------------------------------------- */
 
-static void logana_register_job(logana_engine_t *engine, logana_job_t *job) {
+static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
     pthread_mutex_lock(&engine->jobs_lock);
     if (engine->job_count >= LOGANA_MAX_JOBS) {
         for (size_t i = 0; i < engine->job_count; ++i) {
@@ -129,8 +129,11 @@ static void logana_register_job(logana_engine_t *engine, logana_job_t *job) {
     }
     if (engine->job_count < LOGANA_MAX_JOBS) {
         engine->jobs[engine->job_count++] = job;
+        pthread_mutex_unlock(&engine->jobs_lock);
+        return true;
     }
     pthread_mutex_unlock(&engine->jobs_lock);
+    return false;
 }
 
 logana_job_t *logana_engine_find_job(logana_engine_t *engine, uint64_t job_id) {
@@ -185,8 +188,13 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
     job->updated_ms = job->created_ms;
     job->ref_count = 1;
     job->status = LOGANA_JOB_QUEUED;
-    logana_register_job(engine, job);
+    if (!logana_register_job(engine, job)) {
+        logana_job_unref(job);
+        return NULL;
+    }
+    logana_job_ref(job);
     if (!logana_queue_push(&engine->ingress_queue, job, 100)) {
+        logana_job_unref(job);
         logana_set_job_status(job, LOGANA_JOB_FAILED, "ingress queue is saturated");
     }
     return job;
