@@ -8,6 +8,10 @@
 #define NUM_ROWS 100
 #define NUM_CLUSTERS 3
 
+#ifndef SAFE_FREE
+#define SAFE_FREE(ptr) do { free(ptr); ptr = NULL; } while(0)
+#endif
+
 typedef struct {
     char   timestamp[32];
     char   service[32];
@@ -189,6 +193,13 @@ double calculate_cluster_distribution_entropy(const int *cluster_assignments,
     if (!counts)
         return 0.0;
 
+    // Verify heap pointer alignment (e.g. 8-byte and 16-byte alignment checks)
+    uintptr_t addr = (uintptr_t)counts;
+    printf("[DEBUG] Allocation 'counts' address: %p (8-byte aligned: %s, 16-byte aligned: %s)\n",
+           (void *)counts,
+           (addr % 8 == 0) ? "YES" : "NO",
+           (addr % 16 == 0) ? "YES" : "NO");
+
     for (int i = 0; i < total_rows; ++i) {
         int cid = cluster_assignments[i];
         if (cid >= 0 && cid < num_clusters)
@@ -203,7 +214,7 @@ double calculate_cluster_distribution_entropy(const int *cluster_assignments,
             entropy -= p * log2(p);
     }
 
-    free(counts);
+    SAFE_FREE(counts);
     return entropy;
 }
 

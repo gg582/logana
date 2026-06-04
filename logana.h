@@ -7,5 +7,10 @@
 #include "logana/render.h"
 #include "logana/server.h"
 #include "logana/types.h"
+#include "simd_wrapper.h"
+
+#ifndef SAFE_FREE
+#define SAFE_FREE(ptr) do { free(ptr); ptr = NULL; } while(0)
+#endif
 
 #endif
