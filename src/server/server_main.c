@@ -1,10 +1,17 @@
 #include "logana/logana.h"
 
+#include <cjson/cJSON.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 int main(void) {
+    cJSON_Hooks hooks = {
+        .malloc_fn = malloc,
+        .free_fn = free
+    };
+    cJSON_InitHooks(&hooks);
+
     const char *config_path = getenv("LOGANA_CONFIG");
     if (!config_path) config_path = "./collect.ini";
     const char *port_env = getenv("LOGANA_ENGINE_PORT");
