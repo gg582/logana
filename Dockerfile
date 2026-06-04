@@ -43,6 +43,8 @@ RUN apt-get update \
        libnghttp2-14 \
        nodejs \
        sqlite3 \
+       gdb \
+       procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build-env /app /app

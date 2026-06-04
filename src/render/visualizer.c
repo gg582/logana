@@ -39,9 +39,9 @@ typedef struct {
     double outlier_ratio;
     double cluster_balance;
     double schema_drift;
-    const char *svg;
-    const char *html;
-    const char *error;
+    char *svg;   /* owned copy — must call logana_job_snapshot_free */
+    char *html;  /* owned copy — must call logana_job_snapshot_free */
+    const char *error; /* points into job->error[], never freed */
 } logana_job_snapshot_t;
 
 static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapshot) {
@@ -58,10 +58,18 @@ static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapsh
     snapshot->outlier_ratio = job->summary.outlier_ratio;
     snapshot->cluster_balance = job->summary.cluster_balance;
     snapshot->schema_drift = job->summary.schema_drift;
-    snapshot->svg = job->svg;
-    snapshot->html = job->html;
-    snapshot->error = job->error;
+    /* strdup under lock so the pointers remain valid after unlock */
+    snapshot->svg  = job->svg  ? strdup(job->svg)  : NULL;
+    snapshot->html = job->html ? strdup(job->html) : NULL;
+    snapshot->error = job->error; /* static array — valid for life of job */
     pthread_mutex_unlock(&job->lock);
+}
+
+static void logana_job_snapshot_free(logana_job_snapshot_t *snapshot) {
+    free(snapshot->svg);
+    free(snapshot->html);
+    snapshot->svg = NULL;
+    snapshot->html = NULL;
 }
 
 static char *logana_cjson_to_string(cJSON *json) {
@@ -190,8 +198,21 @@ static char *logana_render_template(const char *template_path, cJSON *context) {
     return copy;
 }
 
+static void logana_svg_append(char *svg, const char *str, size_t cap) {
+    size_t len = strlen(svg);
+    size_t str_len = strlen(str);
+    if (len + 1 >= cap) return;
+    size_t rem = cap - len - 1;
+    if (str_len < rem) {
+        memcpy(svg + len, str, str_len + 1);
+    } else {
+        memcpy(svg + len, str, rem);
+        svg[cap - 1] = '\0';
+    }
+}
+
 static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
-    size_t cap = 32768;
+    size_t cap = 131072;
     char *svg = calloc(1, cap);
     if (!svg) return NULL;
 
@@ -250,14 +271,14 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     for (int x = 80; x < w; x += 80) {
         char line[128];
         snprintf(line, sizeof(line), "<line x1='%d' y1='48' x2='%d' y2='%d' stroke='#86a7b9'/>", x, x, h - 48);
-        strncat(svg, line, cap - strlen(svg) - 1);
+        logana_svg_append(svg, line, cap);
     }
     for (int y = 60; y < h - 40; y += 60) {
         char line[128];
         snprintf(line, sizeof(line), "<line x1='56' y1='%d' x2='%d' y2='%d' stroke='#86a7b9'/>", y, w - 56, y);
-        strncat(svg, line, cap - strlen(svg) - 1);
+        logana_svg_append(svg, line, cap);
     }
-    strncat(svg, "</g>", cap - strlen(svg) - 1);
+    logana_svg_append(svg, "</g>", cap);
 
     // Axis labels
     char axes[1024];
@@ -267,7 +288,7 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
              "<text x='%d' y='%d' text-anchor='middle' transform='rotate(-90 %d %d)'>dim 1</text>"
              "</g>",
              w / 2, h - 14, 18, h / 2, 18, h / 2);
-    strncat(svg, axes, cap - strlen(svg) - 1);
+    logana_svg_append(svg, axes, cap);
 
     // Plot area
     int plot_left = 72;
@@ -277,7 +298,7 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     int plot_w = plot_right - plot_left;
     int plot_h = plot_bottom - plot_top;
 
-    strncat(svg, "<g filter='url(#glow)'>", cap - strlen(svg) - 1);
+    logana_svg_append(svg, "<g filter='url(#glow)'>", cap);
     for (size_t i = 0; i < rows; ++i) {
         if (job->matrix.valid_mask) {
             if (!job->matrix.valid_mask[i * dims + d0]) continue;
@@ -327,9 +348,9 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
         snprintf(point, sizeof(point),
                  "<circle cx='%.2f' cy='%.2f' r='%.2f' fill='%s' opacity='0.88' data-row='%zu' data-cluster='%d' data-outlier='%s' data-noise='%s'/>",
                  x, y, radius, color, i, label, outlier ? "true" : "false", is_noise_point ? "true" : "false");
-        strncat(svg, point, cap - strlen(svg) - 1);
+        logana_svg_append(svg, point, cap);
     }
-    strncat(svg, "</g>", cap - strlen(svg) - 1);
+    logana_svg_append(svg, "</g>", cap);
 
     // Zero baseline layer (dynamic)
     if (min_y < 0.0 && max_y > 0.0) {
@@ -343,12 +364,12 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
                  "</g>",
                  plot_left, zero_y, plot_right, zero_y,
                  plot_left - 6, zero_y);
-        strncat(svg, baseline, cap - strlen(svg) - 1);
+        logana_svg_append(svg, baseline, cap);
     }
 
     // Legend for clusters
     if (job->result.labels && job->result.cluster_count > 0) {
-        strncat(svg, "<g>", cap - strlen(svg) - 1);
+        logana_svg_append(svg, "<g>", cap);
         int lx = plot_right - 140;
         int ly = plot_top + 10;
         for (size_t c = 0; c < job->result.cluster_count && c < color_count; ++c) {
@@ -358,9 +379,9 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
                      "<text x='%d' y='%d' fill='#d6edf8' font-size='12' font-family='IBM Plex Sans, sans-serif'>cluster %zu</text>",
                      lx, ly + (int)c * 20, engine->config.color_palette[c % color_count],
                      lx + 14, ly + 4 + (int)c * 20, c);
-            strncat(svg, legend, cap - strlen(svg) - 1);
+            logana_svg_append(svg, legend, cap);
         }
-        strncat(svg, "</g>", cap - strlen(svg) - 1);
+        logana_svg_append(svg, "</g>", cap);
     }
 
     // Footer
@@ -374,7 +395,7 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
              logana_algorithm_name(job->result.algorithm != LOGANA_ALGO_AUTO ? job->result.algorithm : job->algorithm), job->result.cluster_count,
              job->result.noise_count,
              job->summary.outlier_ratio * 100.0);
-    strncat(svg, footer, cap - strlen(svg) - 1);
+    logana_svg_append(svg, footer, cap);
 
     free(cluster_counts);
     return svg;
@@ -385,6 +406,7 @@ static char *logana_render_job_fragment(logana_job_t *job) {
     logana_job_snapshot(job, &snapshot);
 
     cJSON *context = logana_build_report_context(&snapshot, job);
+    logana_job_snapshot_free(&snapshot);
     if (!context) return NULL;
     char *html = logana_render_template(LOGANA_REPORT_FRAGMENT_TEMPLATE, context);
     cJSON_Delete(context);
@@ -479,7 +501,7 @@ char *logana_job_status_json(logana_job_t *job) {
     logana_job_snapshot(job, &snapshot);
 
     cJSON *json = cJSON_CreateObject();
-    if (!json) return NULL;
+    if (!json) { logana_job_snapshot_free(&snapshot); return NULL; }
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)snapshot.job_id);
     cJSON_AddStringToObject(json, "jobId", job_id);
@@ -489,6 +511,7 @@ char *logana_job_status_json(logana_job_t *job) {
 
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
+    logana_job_snapshot_free(&snapshot);
     return rendered;
 }
 
@@ -497,7 +520,7 @@ char *logana_job_result_json(logana_job_t *job) {
     logana_job_snapshot(job, &snapshot);
 
     cJSON *json = cJSON_CreateObject();
-    if (!json) return NULL;
+    if (!json) { logana_job_snapshot_free(&snapshot); return NULL; }
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)snapshot.job_id);
     cJSON_AddStringToObject(json, "jobId", job_id);
@@ -556,6 +579,7 @@ char *logana_job_result_json(logana_job_t *job) {
 
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
+    logana_job_snapshot_free(&snapshot);
     return rendered;
 }
 
@@ -564,7 +588,7 @@ char *logana_job_report_page(logana_job_t *job) {
     logana_job_snapshot(job, &snapshot);
 
     cJSON *context = cJSON_CreateObject();
-    if (!context) return NULL;
+    if (!context) { logana_job_snapshot_free(&snapshot); return NULL; }
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)snapshot.job_id);
     cJSON_AddStringToObject(context, "jobId", job_id);
@@ -573,5 +597,6 @@ char *logana_job_report_page(logana_job_t *job) {
 
     char *page = logana_render_template(LOGANA_REPORT_PAGE_TEMPLATE, context);
     cJSON_Delete(context);
+    logana_job_snapshot_free(&snapshot);
     return page;
 }

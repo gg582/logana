@@ -4,6 +4,7 @@ services:
       context: .
     ports:
       - "23345:23345"
+      - "24445:24445"
     volumes:
       - ./collect.ini:/etc/logana/collect.ini:ro
     ulimits:

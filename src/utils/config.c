@@ -83,7 +83,7 @@ void logana_default_config(logana_config_t *config) {
     snprintf(config->color_palette[config->color_count++], 16, "%s", "#9D00FF");
 }
 
-static void logana_parse_array_line(char items[][96], size_t *count, size_t width, const char *line) {
+static void logana_parse_array_line(char *items, size_t *count, size_t max_items, size_t width, const char *line) {
     const char *lb = strchr(line, '[');
     const char *rb = strrchr(line, ']');
     if (!lb || !rb || rb <= lb) return;
@@ -93,7 +93,7 @@ static void logana_parse_array_line(char items[][96], size_t *count, size_t widt
     memcpy(buffer, lb + 1, len);
     buffer[len] = '\0';
     char *cursor = buffer;
-    while (*cursor && *count < LOGANA_MAX_KEYS) {
+    while (*cursor && *count < max_items) {
         while (*cursor && (isspace((unsigned char)*cursor) || *cursor == ',')) ++cursor;
         if (*cursor == '"') ++cursor;
         char *start = cursor;
@@ -101,8 +101,9 @@ static void logana_parse_array_line(char items[][96], size_t *count, size_t widt
         size_t item_len = (size_t)(cursor - start);
         if (item_len > 0) {
             size_t copy_len = item_len < (width - 1) ? item_len : (width - 1);
-            memset(items[*count], 0, width);
-            memcpy(items[*count], start, copy_len);
+            char *dest = items + (*count) * width;
+            memset(dest, 0, width);
+            memcpy(dest, start, copy_len);
             (*count)++;
         }
         while (*cursor && *cursor != ',') ++cursor;
@@ -135,13 +136,13 @@ int logana_config_load(const char *path, logana_config_t *config) {
         else if (strstr(line, "async_render_threads")) config->async_render_threads = strtoull(strchr(line, '=') + 1, NULL, 10);
         else if (strstr(line, "timestamp_keys")) {
             config->timestamp_key_count = 0;
-            logana_parse_array_line((char (*)[96])config->timestamp_keys, &config->timestamp_key_count, sizeof(config->timestamp_keys[0]), line);
+            logana_parse_array_line((char *)config->timestamp_keys, &config->timestamp_key_count, LOGANA_MAX_KEYS, sizeof(config->timestamp_keys[0]), line);
         } else if (strstr(line, "numeric_keys")) {
             config->numeric_key_count = 0;
-            logana_parse_array_line((char (*)[96])config->numeric_keys, &config->numeric_key_count, sizeof(config->numeric_keys[0]), line);
+            logana_parse_array_line((char *)config->numeric_keys, &config->numeric_key_count, LOGANA_MAX_KEYS, sizeof(config->numeric_keys[0]), line);
         } else if (strstr(line, "category_keys")) {
             config->category_key_count = 0;
-            logana_parse_array_line((char (*)[96])config->category_keys, &config->category_key_count, sizeof(config->category_keys[0]), line);
+            logana_parse_array_line((char *)config->category_keys, &config->category_key_count, LOGANA_MAX_KEYS, sizeof(config->category_keys[0]), line);
         } else if (strstr(line, "default_algorithm")) config->default_algorithm = logana_parse_algorithm(strchr(line, '"') + 1);
         else if (strstr(line, "dbscan_eps")) config->dbscan_eps = atof(strchr(line, '=') + 1);
         else if (strstr(line, "dbscan_min_samples")) config->dbscan_min_samples = strtoull(strchr(line, '=') + 1, NULL, 10);
@@ -155,10 +156,10 @@ int logana_config_load(const char *path, logana_config_t *config) {
         else if (strstr(line, "canvas_height")) config->canvas_height = atoi(strchr(line, '=') + 1);
         else if (strstr(line, "color_palette")) {
             config->color_count = 0;
-            logana_parse_array_line((char (*)[96])config->color_palette, &config->color_count, sizeof(config->color_palette[0]), line);
+            logana_parse_array_line((char *)config->color_palette, &config->color_count, 8, sizeof(config->color_palette[0]), line);
         } else if (strstr(line, "paths")) {
             config->nested_path_count = 0;
-            logana_parse_array_line((char (*)[96])config->nested_paths, &config->nested_path_count, sizeof(config->nested_paths[0]), line);
+            logana_parse_array_line((char *)config->nested_paths, &config->nested_path_count, LOGANA_MAX_KEYS, sizeof(config->nested_paths[0]), line);
         }
     }
     fclose(fp);

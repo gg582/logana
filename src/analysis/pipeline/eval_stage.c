@@ -11,9 +11,14 @@ static int eval_process(void *state, logana_pipeline_context_t *ctx) {
     (void)state;
     logana_job_t *job = ctx->job;
 
-    /* Commit result into job */
+    /* Commit result into job — free old allocations first to avoid leaks */
+    free(job->result.labels);
+    free(job->result.is_noise);
     job->result = ctx->result;
     job->summary = ctx->summary;
+    /* Zero out ctx->result so pipeline_execute won't double-free the
+       labels/is_noise pointers we just transferred to job->result. */
+    memset(&ctx->result, 0, sizeof(ctx->result));
 
     /* Also back-fill legacy matrix.labels so legacy render paths don't crash */
     if (job->matrix.labels) { free(job->matrix.labels); job->matrix.labels = NULL; }

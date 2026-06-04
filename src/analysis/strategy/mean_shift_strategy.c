@@ -9,7 +9,9 @@ static size_t assign_cluster_modes(const double *modes, size_t mode_count, size_
     for (size_t i = 0; i < mode_count; ++i) {
         if (dist_fn(modes + i * dims, candidate, NULL, NULL, dims, summary) < 0.04) return i;
     }
-    memcpy((double *)(modes + mode_count * dims), candidate, dims * sizeof(double));
+    if (mode_count < 16) {
+        memcpy((double *)(modes + mode_count * dims), candidate, dims * sizeof(double));
+    }
     return mode_count;
 }
 

@@ -14,7 +14,7 @@ CWIST_SQLITE_STAMP := $(CWIST_ROOT)/.logana-cwist-sqlite-ready
 SRCDIRS  := . src src/core src/analysis src/analysis/pipeline src/analysis/strategy src/analysis/metrics src/render src/server src/utils
 INCDIRS  := . include lib/libttak/include $(CWIST_ROOT)/include $(CWIST_ROOT)/lib
 
-CFLAGS   ?= -O3 -std=c17 -Wall -Wextra -Wshadow -pthread -D_GNU_SOURCE
+CFLAGS   ?= -O3 -std=c17 -Wall -Wextra -Wshadow -pthread -D_GNU_SOURCE -D_REENTRANT -fno-strict-aliasing
 CPPFLAGS += $(addprefix -I,$(INCDIRS))
 LDFLAGS  += -pthread -lm -lsqlite3 -lssl -lcrypto -ldl -lstdc++ -lz -lcurl -lnghttp2
 
