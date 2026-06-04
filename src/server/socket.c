@@ -57,6 +57,14 @@ static void logana_set_owned_response(cwist_http_response *res, cwist_http_statu
     cwist_http_response_set_body_ptr_managed(res, body, strlen(body), logana_free_response_body, NULL);
 }
 
+static char *logana_cjson_to_string(cJSON *json) {
+    char *rendered = cJSON_PrintUnformatted(json);
+    if (!rendered) return NULL;
+    char *copy = strdup(rendered);
+    cJSON_free(rendered);
+    return copy;
+}
+
 static void logana_send_json(cwist_http_response *res, cwist_http_status_t status, char *json) {
     logana_set_owned_response(res, status, "application/json", json);
 }
@@ -68,7 +76,7 @@ static void logana_send_error(cwist_http_response *res, cwist_http_status_t stat
         return;
     }
     cJSON_AddStringToObject(json, "error", message);
-    char *rendered = cJSON_PrintUnformatted(json);
+    char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
     logana_send_json(res, status, rendered);
 }
@@ -135,7 +143,7 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
     pthread_mutex_lock(&job->lock);
     cJSON_AddStringToObject(json, "status", logana_status_name(job->status));
     pthread_mutex_unlock(&job->lock);
-    char *rendered = cJSON_PrintUnformatted(json);
+    char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
     logana_send_json(res, CWIST_HTTP_OK, rendered);
 }

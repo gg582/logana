@@ -68,7 +68,7 @@ static char *logana_cjson_to_string(cJSON *json) {
     char *rendered = cJSON_PrintUnformatted(json);
     if (!rendered) return NULL;
     char *copy = strdup(rendered);
-    free(rendered);
+    cJSON_free(rendered);
     return copy;
 }
 
