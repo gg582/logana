@@ -88,6 +88,10 @@ static int feature_process(void *state, logana_pipeline_context_t *ctx) {
     /* If the source matrix was already owned by a previous stage,
        we steal the pointers; otherwise we duplicate them. */
     if (!ctx->working_matrix_owned) {
+        if (!src->timestamps || !src->categories || !src->formats) {
+            free(nvalues); free(nmask);
+            return -1;
+        }
         nts = malloc(rows * sizeof(uint64_t));
         ncats = malloc(rows * sizeof(uint64_t));
         nfmts = malloc(rows * sizeof(uint8_t));

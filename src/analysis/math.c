@@ -329,38 +329,102 @@ double logana_distance_zscore_sq(const double *a, const double *b,
 
 /* -------------------------------------------------------------------------- */
 /* Matrix parsing                                                             */
+static bool logana_checked_mul_size(size_t a, size_t b, size_t *out) {
+    if (!out) return false;
+    if (a != 0 && b > SIZE_MAX / a) return false;
+    *out = a * b;
+    return true;
+}
+
+static void *logana_memdup_bytes(const void *src, size_t bytes) {
+    void *dst = malloc(bytes);
+    if (!dst) return NULL;
+    memcpy(dst, src, bytes);
+    return dst;
+}
+
+static bool logana_grow_matrix_buffers(double **values,
+                                       uint64_t **timestamps,
+                                       uint8_t **valid_mask,
+                                       uint64_t **categories,
+                                       uint8_t **formats,
+                                       size_t old_cap,
+                                       size_t new_cap,
+                                       size_t dims) {
+    size_t old_cells = 0;
+    size_t new_cells = 0;
+    if (!logana_checked_mul_size(old_cap, dims, &old_cells)) return false;
+    if (!logana_checked_mul_size(new_cap, dims, &new_cells)) return false;
+
+    double *new_values = malloc(new_cells * sizeof(double));
+    uint64_t *new_timestamps = malloc(new_cap * sizeof(uint64_t));
+    uint8_t *new_valid_mask = malloc(new_cells * sizeof(uint8_t));
+    uint64_t *new_categories = calloc(new_cap, sizeof(uint64_t));
+    uint8_t *new_formats = calloc(new_cap, sizeof(uint8_t));
+    if (!new_values || !new_timestamps || !new_valid_mask || !new_categories || !new_formats) {
+        free(new_values);
+        free(new_timestamps);
+        free(new_valid_mask);
+        free(new_categories);
+        free(new_formats);
+        return false;
+    }
+
+    memcpy(new_values, *values, old_cells * sizeof(double));
+    memcpy(new_timestamps, *timestamps, old_cap * sizeof(uint64_t));
+    memcpy(new_valid_mask, *valid_mask, old_cells * sizeof(uint8_t));
+    memcpy(new_categories, *categories, old_cap * sizeof(uint64_t));
+    memcpy(new_formats, *formats, old_cap * sizeof(uint8_t));
+
+    free(*values);
+    free(*timestamps);
+    free(*valid_mask);
+    free(*categories);
+    free(*formats);
+
+    *values = new_values;
+    *timestamps = new_timestamps;
+    *valid_mask = new_valid_mask;
+    *categories = new_categories;
+    *formats = new_formats;
+    return true;
+}
+
 size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
     size_t dims = engine->config.numeric_key_count;
     if (dims == 0) dims = LOGANA_MAX_DIMENSIONS;
     if (dims > LOGANA_MAX_DIMENSIONS) dims = LOGANA_MAX_DIMENSIONS;
 
     size_t row_capacity = 1024;
-    double *values = malloc(row_capacity * dims * sizeof(double));
+    size_t cell_capacity = 0;
+    if (!logana_checked_mul_size(row_capacity, dims, &cell_capacity)) return 0;
+
+    double *values = malloc(cell_capacity * sizeof(double));
     uint64_t *timestamps = malloc(row_capacity * sizeof(uint64_t));
-    uint8_t *valid_mask = malloc(row_capacity * dims * sizeof(uint8_t));
+    uint8_t *valid_mask = malloc(cell_capacity * sizeof(uint8_t));
     uint64_t *categories = calloc(row_capacity, sizeof(uint64_t));
     uint8_t *formats = calloc(row_capacity, sizeof(uint8_t));
-    if (!values || !timestamps || !valid_mask || !categories || !formats) {
-        free(values); free(timestamps); free(valid_mask); free(categories); free(formats);
+    char *scratch = logana_memdup_bytes(job->payload, job->payload_size + 1);
+    if (!values || !timestamps || !valid_mask || !categories || !formats || !scratch) {
+        free(values); free(timestamps); free(valid_mask); free(categories); free(formats); free(scratch);
         return 0;
     }
 
     size_t rows = 0;
-    char *cursor = job->payload;
+    char *cursor = scratch;
     while (cursor && *cursor && rows < engine->config.max_rows_per_analysis) {
         char *next = strchr(cursor, '\n');
         if (next) *next = '\0';
         if (*cursor) {
             if (rows == row_capacity) {
                 size_t new_cap = row_capacity * 2;
-                double *grown_v = realloc(values, new_cap * dims * sizeof(double));
-                uint64_t *grown_t = realloc(timestamps, new_cap * sizeof(uint64_t));
-                uint8_t *grown_m = realloc(valid_mask, new_cap * dims * sizeof(uint8_t));
-                uint64_t *grown_c = realloc(categories, new_cap * sizeof(uint64_t));
-                uint8_t *grown_f = realloc(formats, new_cap * sizeof(uint8_t));
-                if (!grown_v || !grown_t || !grown_m || !grown_c || !grown_f) break;
-                values = grown_v; timestamps = grown_t; valid_mask = grown_m;
-                categories = grown_c; formats = grown_f; row_capacity = new_cap;
+                if (new_cap <= row_capacity ||
+                    !logana_grow_matrix_buffers(&values, &timestamps, &valid_mask,
+                                                &categories, &formats, row_capacity,
+                                                new_cap, dims)) {
+                    break;
+                }
+                row_capacity = new_cap;
             }
             {
                 const char *p = cursor;
@@ -447,10 +511,21 @@ size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
             }
             categories[rows] = cat_off > 0 ? logana_hash64(cat_buf, cat_off) : 0;
             if ((engine->config.numeric_key_count == 0 || configured_valid_found == 0) && captured == 0) {
-                extracted[captured] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
-                extracted_valid[captured] = true;
-                if (captured < dims) { extracted[++captured] = (double)strlen(cursor); extracted_valid[captured] = true; }
-                if (captured < dims) { extracted[++captured] = (double)(logana_count_chars(cursor, '=') + logana_count_chars(cursor, ':')); extracted_valid[captured] = true; }
+                if (captured < dims) {
+                    extracted[captured] = (double)(logana_hash64(cursor, strlen(cursor)) % 1000000ULL) / 1000.0;
+                    extracted_valid[captured] = true;
+                    ++captured;
+                }
+                if (captured < dims) {
+                    extracted[captured] = (double)strlen(cursor);
+                    extracted_valid[captured] = true;
+                    ++captured;
+                }
+                if (captured < dims) {
+                    extracted[captured] = (double)(logana_count_chars(cursor, '=') + logana_count_chars(cursor, ':'));
+                    extracted_valid[captured] = true;
+                    ++captured;
+                }
             }
             while (captured < dims) {
                 extracted[captured] = NAN;
@@ -469,6 +544,7 @@ size_t logana_parse_matrix(logana_engine_t *engine, logana_job_t *job) {
         cursor = next + 1;
     }
 
+    free(scratch);
     job->matrix.values = values;
     job->matrix.timestamps = timestamps;
     job->matrix.valid_mask = valid_mask;
