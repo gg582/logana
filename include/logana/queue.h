@@ -8,6 +8,7 @@ void logana_queue_close(logana_queue_t *queue);
 void logana_queue_destroy(logana_queue_t *queue);
 bool logana_queue_push(logana_queue_t *queue, void *item, uint32_t wait_ms);
 bool logana_queue_pop(logana_queue_t *queue, void **item, uint32_t wait_ms);
+size_t logana_queue_count(logana_queue_t *queue);
 
 void *logana_aggregator_main(void *arg);
 void *logana_analyze_batch_task(void *arg);

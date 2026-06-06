@@ -60,6 +60,13 @@ bool logana_queue_push(logana_queue_t *queue, void *item, uint32_t wait_ms) {
     return ok;
 }
 
+size_t logana_queue_count(logana_queue_t *queue) {
+    pthread_mutex_lock(&queue->mutex);
+    size_t count = ttak_ringbuf_count(queue->ring);
+    pthread_mutex_unlock(&queue->mutex);
+    return count;
+}
+
 bool logana_queue_pop(logana_queue_t *queue, void **item, uint32_t wait_ms) {
     struct timespec deadline;
     logana_timespec_after_ms(&deadline, wait_ms);
@@ -137,6 +144,7 @@ void *logana_aggregator_main(void *arg) {
         batch->total_bytes += first->payload_size;
         pthread_mutex_lock(&first->lock);
         first->status = LOGANA_JOB_BATCHING;
+        first->queue_position = 0;
         pthread_mutex_unlock(&first->lock);
 
         while (batch->job_count < LOGANA_MAX_BATCH_JOBS &&
@@ -150,6 +158,7 @@ void *logana_aggregator_main(void *arg) {
             batch->total_bytes += next->payload_size;
             pthread_mutex_lock(&next->lock);
             next->status = LOGANA_JOB_BATCHING;
+            next->queue_position = 0;
             pthread_mutex_unlock(&next->lock);
         }
 

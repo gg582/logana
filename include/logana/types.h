@@ -15,6 +15,8 @@
 #define LOGANA_MAX_DIMENSIONS 32
 #define LOGANA_MAX_BATCH_JOBS 256
 #define LOGANA_MAX_JOBS 4096
+#define LOGANA_MAX_PAYLOAD_LINES 30000
+#define LOGANA_MAX_PAYLOAD_BYTES (10 * 1024 * 1024)
 
 typedef enum {
     LOGANA_JOB_QUEUED = 0,
@@ -131,6 +133,9 @@ typedef struct logana_job {
     char *html;
     char error[256];
     struct logana_engine *engine;
+    bool payload_truncated;
+    size_t processed_lines_count;
+    size_t queue_position;
 } logana_job_t;
 
 typedef struct {

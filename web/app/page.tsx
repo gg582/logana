@@ -785,6 +785,8 @@ function FitText({
       className={className}
       style={{
         display: "inline-block",
+        maxWidth: "100%",
+        overflowWrap: "break-word",
         visibility: ready ? "visible" : "hidden",
         ...style,
       }}
@@ -1545,6 +1547,8 @@ export default function Home() {
   const [algorithm, setAlgorithm] = useState("auto");
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [analysisTab, setAnalysisTab] = useState<"visuals" | "report">("visuals");
   const [isDragging, setIsDragging] = useState(false);
   const [windows, setWindows] = useState<Record<WindowKey, boolean>>({
     input: true,
@@ -1622,10 +1626,31 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function submit(overridePayload?: string) {
+  async function submit(overridePayload?: string, attempt: number = 1) {
+    const MAX_ATTEMPTS = 10;
+    const RETRY_DELAY = 5000;
     const activePayload = overridePayload ?? payload;
     setStatus("submitting");
     setResult(null);
+    setReportHtml(null);
+
+    async function pollJob(jobId: string, onStatus: (s: Record<string, unknown>) => void): Promise<Result> {
+      return new Promise((resolve) => {
+        const tick = setInterval(async () => {
+          try {
+            const s = (await fetch(`/api/jobs/${jobId}/status`).then((r) => r.json())) as Record<string, unknown>;
+            onStatus(s);
+            if (s.status === "ready" || s.status === "failed") {
+              clearInterval(tick);
+              const res = (await fetch(`/api/jobs/${jobId}`).then((r) => r.json())) as Result;
+              resolve(res);
+            }
+          } catch {
+            /* Ignore transient network errors and keep polling */
+          }
+        }, 2000);
+      });
+    }
 
     if (algorithm === "auto") {
       setStatus("auto: submitting all algorithms");
@@ -1642,29 +1667,31 @@ export default function Home() {
 
       const validJobs = ingestResults.filter((j): j is typeof j & { jobId: string } => !!j.jobId);
       if (validJobs.length === 0) {
-        setStatus(ingestResults[0]?.error ?? "auto submit failed");
+        if (attempt < MAX_ATTEMPTS) {
+          setStatus(`auto submit failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
+          setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
+        } else {
+          setStatus(ingestResults[0]?.error ?? "auto submit failed");
+        }
         return;
       }
 
       setStatus(`auto: waiting for ${validJobs.length} jobs…`);
 
+      const statuses = new Map<string, string>();
       const finished = await Promise.all(
         validJobs.map(({ algo, jobId }) =>
-          new Promise<{ algo: string; result: Result }>((resolve) => {
-            const stream = new EventSource(`/api/jobs/${jobId}/stream`);
-            stream.onmessage = async (event) => {
-              const data = JSON.parse(event.data) as Result;
-              if (data.status === "ready" || data.status === "failed") {
-                stream.close();
-                const resolved = await fetch(`/api/jobs/${jobId}`).then((r) => r.json());
-                resolve({ algo, result: { ...resolved, algorithm: algo } });
-              }
-            };
-            stream.onerror = () => {
-              stream.close();
-              resolve({ algo, result: { jobId, status: "failed", algorithm: algo } as Result });
-            };
-          })
+          pollJob(jobId, (s) => {
+            statuses.set(jobId, String(s.status));
+            const pos = Number(s.position ?? 0);
+            const eta = Number(s.etaMs ?? 0);
+            if (pos > 0 && eta > 0) {
+              setStatus(`auto: ${algo} queued (position ${pos}, ~${Math.ceil(eta / 1000)}s)`);
+            }
+          }).then((result) => ({ algo, result: { ...result, algorithm: algo } as Result })).catch(() => ({
+            algo,
+            result: { jobId, status: "failed", algorithm: algo } as Result,
+          }))
         )
       );
 
@@ -1674,10 +1701,22 @@ export default function Home() {
         .sort((a, b) => b.score - a.score);
 
       if (scored.length > 0) {
-        setResult(scored[0].result);
-        setStatus(`ready · auto winner: ${scored[0].algo}`);
+        const winner = scored[0];
+        setResult(winner.result);
+        setStatus(`ready · auto winner: ${winner.algo}`);
+        try {
+          const html = await fetch(`/api/jobs/${winner.result.jobId}/report`).then((r) => r.text());
+          setReportHtml(html);
+        } catch {
+          // ignore report fetch error
+        }
       } else {
-        setStatus("auto: all algorithms failed");
+        if (attempt < MAX_ATTEMPTS) {
+          setStatus(`auto: all algorithms failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
+          setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
+        } else {
+          setStatus("auto: all algorithms failed");
+        }
       }
       return;
     }
@@ -1688,25 +1727,41 @@ export default function Home() {
       body: JSON.stringify({ payload: activePayload, algorithm }),
     }).then((r) => r.json());
     if (!ingest.jobId) {
-      setStatus(ingest.error ?? "submit failed");
+      if (attempt < MAX_ATTEMPTS) {
+        setStatus(`submit failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
+        setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
+      } else {
+        setStatus(ingest.error ?? "submit failed");
+      }
       return;
     }
-    setStatus(`job ${ingest.jobId} queued`);
-    const stream = new EventSource(`/api/jobs/${ingest.jobId}/stream`);
-    stream.onmessage = async (event) => {
-      const data = JSON.parse(event.data) as Result;
-      setStatus(data.status);
-      if (data.status === "ready" || data.status === "failed") {
-        stream.close();
-        const resolved = await fetch(`/api/jobs/${ingest.jobId}`).then((r) => r.json());
-        setResult(resolved);
-        setStatus(resolved.status);
+
+    try {
+      const result = await pollJob(ingest.jobId as string, (s) => {
+        const pos = Number(s.position ?? 0);
+        const eta = Number(s.etaMs ?? 0);
+        if (pos > 0 && eta > 0) {
+          setStatus(`queued (position ${pos}, ~${Math.ceil(eta / 1000)}s)`);
+        } else {
+          setStatus(String(s.status));
+        }
+      });
+      setResult(result);
+      setStatus(result.status);
+      try {
+        const html = await fetch(`/api/jobs/${result.jobId}/report`).then((r) => r.text());
+        setReportHtml(html);
+      } catch {
+        // ignore report fetch error
       }
-    };
-    stream.onerror = () => {
-      stream.close();
-      setStatus("stream disconnected");
-    };
+    } catch {
+      if (attempt < MAX_ATTEMPTS) {
+        setStatus(`stream disconnected, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
+        setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
+      } else {
+        setStatus("stream disconnected");
+      }
+    }
   }
 
   const histogramMarkup = histogramSvgMarkup(analytics.histogram, "Category histogram", `Grouped by ${analytics.categoryKey}`);
@@ -1860,11 +1915,6 @@ export default function Home() {
             <p>The backend engine render stays intact. Export the rendered preview as PNG.</p>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            {result?.jobId ? (
-              <a className="ghost-button" href={`/api/jobs/${result.jobId}/report`} target="_blank" rel="noreferrer">
-                Open report
-              </a>
-            ) : null}
             {engineSvgMarkup ? (
               <button className="ghost-button" onClick={() => downloadSvgAsPng(engineSvgMarkup, "engine-analysis-preview")}>
                 Download PNG
@@ -1872,7 +1922,29 @@ export default function Home() {
             ) : null}
           </div>
         </div>
-        {result?.points && result.points.length > 0 ? (
+        {reportHtml ? (
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              className="ghost-button"
+              style={{ opacity: analysisTab === "visuals" ? 1 : 0.6 }}
+              onClick={() => setAnalysisTab("visuals")}
+            >
+              Visuals
+            </button>
+            <button
+              className="ghost-button"
+              style={{ opacity: analysisTab === "report" ? 1 : 0.6 }}
+              onClick={() => setAnalysisTab("report")}
+            >
+              Report
+            </button>
+          </div>
+        ) : null}
+        {analysisTab === "report" && reportHtml ? (
+          <div className="preview preview-large" style={{ height: "70vh", overflow: "auto" }}>
+            <iframe srcDoc={reportHtml} style={{ width: "100%", height: "100%", border: "none" }} title="Analysis report" />
+          </div>
+        ) : result?.points && result.points.length > 0 ? (
           <InteractiveClusterChart
             points={result.points}
             svgMarkup={result.svg}

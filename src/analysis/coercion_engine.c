@@ -777,6 +777,7 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
                 ctx->valid_mask[base + d] = ctx->row_valid[d];
             }
             ++ctx->row_count;
+            job->processed_lines_count = ctx->row_count;
         }
 
         if (!next) break;

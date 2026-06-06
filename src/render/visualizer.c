@@ -532,9 +532,25 @@ char *logana_job_status_json(logana_job_t *job) {
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)snapshot.job_id);
     cJSON_AddStringToObject(json, "jobId", job_id);
-    cJSON_AddStringToObject(json, "status", logana_status_name(snapshot.status));
+
+    /* Map internal status to frontend-friendly task status */
+    const char *task_status;
+    if (snapshot.status == LOGANA_JOB_READY || snapshot.status == LOGANA_JOB_FAILED) {
+        task_status = "completed";
+    } else if (snapshot.status == LOGANA_JOB_QUEUED) {
+        task_status = "queued";
+    } else {
+        task_status = "processing";
+    }
+    cJSON_AddStringToObject(json, "status", task_status);
     cJSON_AddNumberToObject(json, "updatedMs", (double)snapshot.updated_ms);
     cJSON_AddStringToObject(json, "error", snapshot.error ? snapshot.error : "");
+
+    pthread_mutex_lock(&job->lock);
+    cJSON_AddNumberToObject(json, "queuePosition", (double)job->queue_position);
+    cJSON_AddNumberToObject(json, "processedLinesCount", (double)job->processed_lines_count);
+    cJSON_AddBoolToObject(json, "payloadTruncated", job->payload_truncated);
+    pthread_mutex_unlock(&job->lock);
 
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
@@ -564,6 +580,10 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "html", snapshot.html ? snapshot.html : "");
     cJSON_AddStringToObject(json, "svg", snapshot.svg ? snapshot.svg : "");
     cJSON_AddStringToObject(json, "error", snapshot.error ? snapshot.error : "");
+    pthread_mutex_lock(&job->lock);
+    cJSON_AddBoolToObject(json, "payloadTruncated", job->payload_truncated);
+    cJSON_AddNumberToObject(json, "processedLinesCount", (double)job->processed_lines_count);
+    pthread_mutex_unlock(&job->lock);
 
     cJSON *points = cJSON_CreateArray();
     if (points && job->matrix.values && job->result.labels) {
