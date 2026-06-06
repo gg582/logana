@@ -1334,9 +1334,10 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
             x={margin + i * cellSize + cellSize / 2}
             y={margin - 10}
             textAnchor="end"
-            fill="#9b92c4"
+            fill="#d6edf8"
             fontSize={labelFontSize}
             fontFamily="ui-monospace, monospace"
+            opacity={1}
             transform={`rotate(-45, ${margin + i * cellSize + cellSize / 2}, ${margin - 10})`}
           >
             {key}
