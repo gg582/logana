@@ -594,9 +594,9 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
       <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
       <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Numeric correlation matrix</text>
+      ${rects.join("")}
       ${colLabels}
       ${rowLabels}
-      ${rects.join("")}
     </svg>`;
 }
 
@@ -1327,6 +1327,22 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="correlation heatmap">
+      {keys.map((ki, i) =>
+        keys.map((kj, j) => {
+          const cell = cells.find((c) => (c.x === ki && c.y === kj) || (c.x === kj && c.y === ki));
+          const value = i === j ? 1 : cell?.value ?? 0;
+          const x = margin + j * cellSize;
+          const y = margin + i * cellSize;
+          return (
+            <g key={`${ki}-${kj}`}>
+              <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
+              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize={valueFontSize} fontFamily="ui-monospace, monospace">
+                {value.toFixed(2)}
+              </text>
+            </g>
+          );
+        }),
+      )}
       {keys.map((key, i) => (
         <g key={`label-${key}`}>
           {/* Top labels: rotated -45° so they never overlap horizontally */}
@@ -1355,22 +1371,6 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
           </text>
         </g>
       ))}
-      {keys.map((ki, i) =>
-        keys.map((kj, j) => {
-          const cell = cells.find((c) => (c.x === ki && c.y === kj) || (c.x === kj && c.y === ki));
-          const value = i === j ? 1 : cell?.value ?? 0;
-          const x = margin + j * cellSize;
-          const y = margin + i * cellSize;
-          return (
-            <g key={`${ki}-${kj}`}>
-              <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
-              <text x={x + cellSize / 2} y={y + cellSize / 2 + 4} textAnchor="middle" fill="#fff" fontSize={valueFontSize} fontFamily="ui-monospace, monospace">
-                {value.toFixed(2)}
-              </text>
-            </g>
-          );
-        }),
-      )}
     </svg>
   );
 }
