@@ -251,6 +251,67 @@ function cleanseRow(row: ParsedLogRow, anchors: Map<string, TypeAnchor>, allowed
 }
 
 /* -------------------------------------------------------------------------- */
+/* Dataset-relative outlier filter (MAD-based)                                */
+/* -------------------------------------------------------------------------- */
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function filterDatasetOutliers(rows: ParsedLogRow[]): { rows: ParsedLogRow[]; filteredCount: number } {
+  const MIN_SAMPLES = 5;
+  const THRESHOLD = 3.0;      /* ~3 sigma equivalent for normal data */
+  const MAD_CONSTANT = 1.4826; /* consistency constant for normal distribution */
+
+  /* Gather numeric values per field */
+  const perField = new Map<string, number[]>();
+  rows.forEach((row) => {
+    Object.entries(row.numeric).forEach(([key, value]) => {
+      if (!perField.has(key)) perField.set(key, []);
+      perField.get(key)!.push(value);
+    });
+  });
+
+  /* Determine outliers per row-index / field */
+  const outlierSet = new Set<string>();
+  perField.forEach((values, key) => {
+    if (values.length < MIN_SAMPLES) return;
+    const m = median(values);
+    const deviations = values.map((v) => Math.abs(v - m));
+    const mad = median(deviations);
+    if (mad === 0) return; /* constant or near-constant field — skip */
+
+    const limit = THRESHOLD * MAD_CONSTANT * mad;
+    const lower = m - limit;
+    const upper = m + limit;
+
+    values.forEach((v, idx) => {
+      if (v < lower || v > upper) {
+        outlierSet.add(`${idx}:${key}`);
+      }
+    });
+  });
+
+  let filteredCount = 0;
+  const filteredRows = rows.map((row, idx) => {
+    const newFields = { ...row.fields };
+    const newNumeric = { ...row.numeric };
+    Object.keys(row.numeric).forEach((key) => {
+      if (outlierSet.has(`${idx}:${key}`)) {
+        newFields[key] = null;
+        delete newNumeric[key];
+        filteredCount++;
+      }
+    });
+    return { ...row, fields: newFields, numeric: newNumeric };
+  });
+
+  return { rows: filteredRows, filteredCount };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Public API                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -261,11 +322,12 @@ export interface CleansingReport {
   nullifiedCount: number;
   rescuedNumericCount: number;
   clampedScaleCount: number;
+  outlierFilteredCount: number;
 }
 
 export function cleanseLogRows(rows: ParsedLogRow[]): { rows: ParsedLogRow[]; report: CleansingReport } {
   if (rows.length === 0) {
-    return { rows: [], report: { inputRows: 0, outputRows: 0, droppedFields: [], nullifiedCount: 0, rescuedNumericCount: 0, clampedScaleCount: 0 } };
+    return { rows: [], report: { inputRows: 0, outputRows: 0, droppedFields: [], nullifiedCount: 0, rescuedNumericCount: 0, clampedScaleCount: 0, outlierFilteredCount: 0 } };
   }
 
   const anchors = buildTypeAnchors(rows);
@@ -310,14 +372,17 @@ export function cleanseLogRows(rows: ParsedLogRow[]): { rows: ParsedLogRow[]; re
     return cleaned;
   });
 
+  const { rows: outlierFilteredRows, filteredCount: outlierFilteredCount } = filterDatasetOutliers(cleansedRows);
+
   const report: CleansingReport = {
     inputRows: rows.length,
-    outputRows: cleansedRows.length,
+    outputRows: outlierFilteredRows.length,
     droppedFields,
     nullifiedCount,
     rescuedNumericCount,
     clampedScaleCount,
+    outlierFilteredCount,
   };
 
-  return { rows: cleansedRows, report };
+  return { rows: outlierFilteredRows, report };
 }
