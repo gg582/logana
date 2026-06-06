@@ -29,6 +29,7 @@ typedef struct {
 
 /* Built-in stage constructors */
 logana_pipeline_stage_t logana_preprocessing_stage(void);
+logana_pipeline_stage_t logana_cleansing_stage(void);
 logana_pipeline_stage_t logana_feature_stage(void);
 logana_pipeline_stage_t logana_model_stage(void);
 logana_pipeline_stage_t logana_eval_stage(void);

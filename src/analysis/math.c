@@ -60,7 +60,7 @@ static int logana_safe_strtod(const char *str, double *out, bool *out_valid, boo
     if (end == num_start) return 0;
     for (const char *p = end; *p; ++p) {
         if (!isspace((unsigned char)*p) && *p != '"' && *p != '\'' && *p != ',' &&
-            *p != ';' && *p != '|' && *p != '}' && *p != ']' && *p != '%') {
+            *p != ';' && *p != '|' && *p != '}' && *p != ']' && *p != '%' && *p != '_') {
             return 0;
         }
     }
@@ -69,9 +69,10 @@ static int logana_safe_strtod(const char *str, double *out, bool *out_valid, boo
         *out = 0.0;
         return 1;
     }
-    if (fabs(value) > 1e15) {
-        if (out_valid) *out_valid = false;
-        *out = 0.0;
+    if (fabs(value) > 9.223372036854776e18) {
+        /* Rule 3: Scale explosion prevention — clamp to Int64.Max instead of rejecting */
+        if (out_valid) *out_valid = true;
+        *out = (value > 0.0) ? 9.223372036854776e18 : -9.223372036854776e18;
         return 1;
     }
     if (clamp_negative && value < 0.0) value = 0.0;

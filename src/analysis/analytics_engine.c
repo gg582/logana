@@ -80,12 +80,13 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
 
     logana_pipeline_stage_t stages[] = {
         logana_preprocessing_stage(),
+        logana_cleansing_stage(),
         logana_feature_stage(),
         logana_model_stage(),
         logana_eval_stage(),
     };
 
-    int rc = logana_pipeline_execute(stages, 4, &ctx);
+    int rc = logana_pipeline_execute(stages, 5, &ctx);
     if (rc != 0) {
         logana_set_job_status(job, LOGANA_JOB_FAILED, "pipeline execution failed");
         pthread_mutex_unlock(&engine->analysis_mutex);

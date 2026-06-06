@@ -8,6 +8,8 @@ const SEVERITY_KEYS = new Set(["level", "lvl", "severity", "priority", "log_leve
 const ENTITY_KEYS = new Set(["service", "svc", "source", "app", "module", "component", "host", "node", "pod", "container"]);
 const MESSAGE_KEYS = new Set(["msg", "message", "text", "event", "detail", "description", "error", "reason", "log"]);
 
+import { cleanseLogRows, type CleansingReport } from "./log-cleanser";
+
 export type HistogramBar = { label: string; value: number };
 
 export type SeriesChart = {
@@ -80,6 +82,7 @@ export type ParsedLogDataset = {
   categoryKey: string;
   primaryKey: string;
   timestampKey: string;
+  cleansingReport: CleansingReport;
 };
 
 const PALETTE = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
@@ -372,11 +375,16 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     };
   });
 
+  /* ------------------------------------------------------------------ */
+  /* Data Cleansing & Type Anchoring (see log-cleanser.ts)              */
+  /* ------------------------------------------------------------------ */
+  const { rows: cleansedRows, report: cleansingReport } = cleanseLogRows(rows);
+
   const fieldCounts = new Map<string, number>();
   const shapeCounts = new Map<string, number>();
   const formatCounts = new Map<string, number>();
 
-  rows.forEach((row) => {
+  cleansedRows.forEach((row) => {
     formatCounts.set(row.format, (formatCounts.get(row.format) ?? 0) + 1);
     shapeCounts.set(row.shapeKey, (shapeCounts.get(row.shapeKey) ?? 0) + 1);
     Object.keys(row.fields).forEach((key) => {
@@ -385,10 +393,10 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     });
   });
 
-  const fieldSchemas = buildFieldSchemas(rows);
+  const fieldSchemas = buildFieldSchemas(cleansedRows);
 
   const numericKeys = fieldSchemas
-    .filter((s) => s.numericCount >= Math.max(1, rows.length * 0.3))
+    .filter((s) => s.numericCount >= Math.max(1, cleansedRows.length * 0.3))
     .map((s) => s.key)
     .filter((k) => !INTERNAL_NUMERIC_KEYS.has(k));
 
@@ -400,12 +408,12 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     .filter((s) => s.boolCount > 0)
     .map((s) => s.key);
 
-  const correlations = computeCorrelations(rows, numericKeys);
+  const correlations = computeCorrelations(cleansedRows, numericKeys);
 
   // Series: all numeric keys over time (or row index)
   const series = numericKeys
     .map((key, index) => {
-      const points = rows
+      const points = cleansedRows
         .map((row) => ({ label: row.timestampLabel, value: row.numeric[key] }))
         .filter((point): point is { label: string; value: number } => typeof point.value === "number");
       if (points.length < 2) return null;
@@ -430,7 +438,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
       const pairKey = [xKey, yKey].sort().join("::");
       if (usedPairs.has(pairKey)) return;
       usedPairs.add(pairKey);
-      const points = rows
+      const points = cleansedRows
         .map((row) => {
           const x = row.numeric[xKey];
           const y = row.numeric[yKey];
@@ -467,7 +475,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
   const booleanHistograms = boolKeys.map((key) => {
     let trueCount = 0;
     let falseCount = 0;
-    rows.forEach((row) => {
+    cleansedRows.forEach((row) => {
       const v = row.fields[key];
       if (v === true) trueCount++;
       else if (v === false) falseCount++;
@@ -480,7 +488,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
   const textKeys = [...MESSAGE_KEYS, ...stringKeys.filter((k) => k.includes("message") || k.includes("msg") || k.includes("text"))];
   const uniqueTextKeys = Array.from(new Set(textKeys));
   uniqueTextKeys.forEach((key, index) => {
-    const points = rows
+    const points = cleansedRows
       .map((row) => {
         const v = row.fields[key];
         if (typeof v !== "string") return null;
@@ -501,12 +509,12 @@ export function parseLogStream(payload: string): ParsedLogDataset {
 
   // Null ratio bars
   const nullRatioBars = fieldSchemas
-    .map((s) => ({ label: s.key, value: Math.round((s.nullCount / Math.max(rows.length, 1)) * 1000) / 10 }))
+    .map((s) => ({ label: s.key, value: Math.round((s.nullCount / Math.max(cleansedRows.length, 1)) * 1000) / 10 }))
     .filter((b) => b.value > 0)
     .sort((a, b) => b.value - a.value)
     .slice(0, 10);
 
-  const totalRows = Math.max(rows.length, 1);
+  const totalRows = Math.max(cleansedRows.length, 1);
   const fieldCoverage = Array.from(fieldCounts.entries())
     .map(([label, value]) => ({ label, value }))
     .sort((a, b) => b.value - a.value)
@@ -530,7 +538,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
   const entityCounts = new Map<string, number>();
   const lowCardinalityStrings: { key: string; values: Map<string, number> }[] = [];
 
-  rows.forEach((row) => {
+  cleansedRows.forEach((row) => {
     if (row.severity) severityCounts.set(row.severity, (severityCounts.get(row.severity) ?? 0) + 1);
     if (row.entity && row.entity !== "unknown" && row.entity !== "unstructured") {
       entityCounts.set(row.entity, (entityCounts.get(row.entity) ?? 0) + 1);
@@ -539,9 +547,9 @@ export function parseLogStream(payload: string): ParsedLogDataset {
 
   // Find low-cardinality string fields for donut charts
   for (const s of fieldSchemas) {
-    if (s.stringCount > 0 && s.uniqueValues.size > 1 && s.uniqueValues.size <= 12 && s.uniqueValues.size < rows.length * 0.5) {
+    if (s.stringCount > 0 && s.uniqueValues.size > 1 && s.uniqueValues.size <= 12 && s.uniqueValues.size < cleansedRows.length * 0.5) {
       const values = new Map<string, number>();
-      rows.forEach((row) => {
+      cleansedRows.forEach((row) => {
         const v = row.fields[s.key];
         if (typeof v === "string") values.set(v, (values.get(v) ?? 0) + 1);
       });
@@ -556,12 +564,12 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     histogram = Array.from(severityCounts.entries())
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value);
-    categoryKey = [...SEVERITY_KEYS].find((key) => rows.some((r) => typeof r.fields[key] === "string")) ?? "severity";
+    categoryKey = [...SEVERITY_KEYS].find((key) => cleansedRows.some((r) => typeof r.fields[key] === "string")) ?? "severity";
   } else if (entityCounts.size > 0) {
     histogram = Array.from(entityCounts.entries())
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value);
-    categoryKey = [...ENTITY_KEYS].find((key) => rows.some((r) => typeof r.fields[key] === "string")) ?? "service";
+    categoryKey = [...ENTITY_KEYS].find((key) => cleansedRows.some((r) => typeof r.fields[key] === "string")) ?? "service";
   } else if (lowCardinalityStrings.length > 0) {
     const best = lowCardinalityStrings.sort((a, b) => b.values.size - a.values.size)[0];
     histogram = Array.from(best.values.entries())
@@ -574,7 +582,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
   }
 
   return {
-    rows,
+    rows: cleansedRows,
     histogram,
     fieldCoverage,
     shapeCoverage,
@@ -587,9 +595,10 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     textLengthSeries,
     nullRatioBars,
     dominantKeys,
-    invalidRows: rows.filter((row) => row.format === "text").length,
+    invalidRows: cleansedRows.filter((row) => row.format === "text").length,
     categoryKey,
     primaryKey,
-    timestampKey: rows.some((row) => row.timestampLabel.startsWith("row ")) ? "row index" : "timestamp",
+    timestampKey: cleansedRows.some((row) => row.timestampLabel.startsWith("row ")) ? "row index" : "timestamp",
+    cleansingReport,
   };
 }
