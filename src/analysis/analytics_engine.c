@@ -71,7 +71,6 @@ static void logana_auto_cache_insert(logana_engine_t *engine, uint64_t fp,
 /* -------------------------------------------------------------------------- */
 
 int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
-    pthread_mutex_lock(&engine->analysis_mutex);
     logana_set_job_status(job, LOGANA_JOB_ANALYZING, NULL);
 
     logana_pipeline_context_t ctx = {0};
@@ -90,7 +89,6 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
     int rc = logana_pipeline_execute(stages, 5, &ctx);
     if (rc != 0) {
         logana_set_job_status(job, LOGANA_JOB_FAILED, "pipeline execution failed");
-        pthread_mutex_unlock(&engine->analysis_mutex);
         return -1;
     }
 
@@ -100,7 +98,6 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
         logana_auto_cache_insert(engine, fp, job->result.algorithm, logana_now_ms());
     }
 
-    pthread_mutex_unlock(&engine->analysis_mutex);
     return 0;
 }
 
@@ -159,20 +156,10 @@ int logana_engine_init(logana_engine_t *engine, const logana_config_t *config) {
     engine->config = *config;
     ttak_logger_init(&engine->logger, logana_log_sink, TTAK_LOG_INFO);
     pthread_mutex_init(&engine->jobs_lock, NULL);
-    pthread_mutex_init(&engine->analysis_mutex, NULL);
     if (logana_queue_init(&engine->ingress_queue, 2048) != 0) return -1;
     if (logana_queue_init(&engine->render_queue, 2048) != 0) return -1;
     uint64_t now = logana_now_ms();
     engine->analysis_pool = ttak_thread_pool_create(engine->config.worker_threads, 0, now);
-    if (engine->analysis_pool) {
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(2, &cpuset);
-        CPU_SET(3, &cpuset);
-        for (size_t i = 0; i < engine->analysis_pool->num_threads; ++i) {
-            pthread_setaffinity_np(engine->analysis_pool->workers[i]->thread, sizeof(cpuset), &cpuset);
-        }
-    }
     engine->render_pool = ttak_thread_pool_create(engine->config.async_render_threads, 0, now);
     if (!engine->analysis_pool || !engine->render_pool) return -1;
     if (pthread_create(&engine->aggregator_thread, NULL, logana_aggregator_main, engine) != 0) return -1;
@@ -284,5 +271,4 @@ void logana_engine_shutdown(logana_engine_t *engine) {
     logana_queue_destroy(&engine->ingress_queue);
     logana_queue_destroy(&engine->render_queue);
     pthread_mutex_destroy(&engine->jobs_lock);
-    pthread_mutex_destroy(&engine->analysis_mutex);
 }

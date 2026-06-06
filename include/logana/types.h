@@ -13,7 +13,7 @@
 #define LOGANA_MAX_KEYS 16
 #define LOGANA_MAX_ROWS 2000000
 #define LOGANA_MAX_DIMENSIONS 32
-#define LOGANA_MAX_BATCH_JOBS 256
+#define LOGANA_MAX_BATCH_JOBS 512
 #define LOGANA_MAX_JOBS 4096
 #define LOGANA_MAX_PAYLOAD_LINES 30000
 #define LOGANA_MAX_PAYLOAD_BYTES (10 * 1024 * 1024)
@@ -171,7 +171,6 @@ typedef struct logana_engine {
     pthread_t render_dispatcher_thread;
     bool shutting_down;
     pthread_mutex_t jobs_lock;
-    pthread_mutex_t analysis_mutex;
     logana_job_t *jobs[LOGANA_MAX_JOBS];
     size_t job_count;
     uint64_t next_job_id;

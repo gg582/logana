@@ -60,11 +60,11 @@ void logana_default_config(logana_config_t *config) {
     config->case_sensitive = false;
     config->fuzzy_threshold = 0.85;
     config->max_rows_per_analysis = 2000000;
-    config->memory_pool_size_mb = 1024;
-    config->aggregation_window_ms = 20;
-    config->min_batch_size_bytes = 64 * 1024;
-    config->worker_threads = 8;
-    config->async_render_threads = 4;
+    config->memory_pool_size_mb = 2048;
+    config->aggregation_window_ms = 100;
+    config->min_batch_size_bytes = 256 * 1024;
+    config->worker_threads = 16;
+    config->async_render_threads = 8;
     config->default_algorithm = LOGANA_ALGO_DBSCAN;
     config->dbscan_eps = 0.45;
     config->dbscan_min_samples = 10;

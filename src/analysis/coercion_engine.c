@@ -993,19 +993,6 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
     job->matrix.dimensions = active_dims;
     job->matrix.labels = NULL;
 
-    /* Propagate numeric key names back into engine config so downstream
-       stages (cleansing) know which dimensions map to which keys. */
-    if (engine) {
-        size_t ncnt = 0;
-        for (size_t c = 0; c < ctx->key_count && ncnt < LOGANA_MAX_KEYS; ++c) {
-            if (col_map[c] != (size_t)-1) {
-                snprintf(engine->config.numeric_keys[ncnt],
-                         sizeof(engine->config.numeric_keys[ncnt]), "%s", ctx->keys[c]);
-                ++ncnt;
-            }
-        }
-        engine->config.numeric_key_count = ncnt;
-    }
-
+    (void)engine;
     return 0;
 }
