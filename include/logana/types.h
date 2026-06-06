@@ -129,6 +129,7 @@ typedef struct logana_job {
     char *svg;
     char *html;
     char error[256];
+    struct logana_engine *engine;
 } logana_job_t;
 
 typedef struct {

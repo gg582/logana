@@ -28,7 +28,9 @@ static int auto_run_candidate(const logana_cluster_strategy_vtable_t *strategy,
     int rc = logana_strategy_fit(strategy, matrix, summary, &out->result);
     if (rc != 0) return -1;
     if (out->result.cluster_count < 2 || out->result.cluster_count > matrix->row_count / 2) {
-        auto_candidate_reset(out);
+        free(out->result.labels);
+        free(out->result.is_noise);
+        memset(&out->result, 0, sizeof(out->result));
         return -1;
     }
     out->valid = true;

@@ -467,6 +467,7 @@ void *logana_render_dispatcher_main(void *arg) {
     while (!engine->shutting_down) {
         logana_job_t *job = NULL;
         if (!logana_queue_pop(&engine->render_queue, (void **)&job, 100)) continue;
+        logana_job_ref(job);
         uint64_t now = logana_now_ms();
         struct {
             logana_engine_t *engine;
@@ -527,7 +528,9 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "status", logana_status_name(snapshot.status));
     cJSON_AddStringToObject(json, "algorithm", logana_algorithm_name(snapshot.algorithm));
     cJSON_AddNumberToObject(json, "rows", (double)snapshot.row_count);
+    pthread_mutex_lock(&job->lock);
     cJSON_AddNumberToObject(json, "clusters", (double)job->result.cluster_count);
+    pthread_mutex_unlock(&job->lock);
     cJSON_AddNumberToObject(json, "entropy", snapshot.entropy);
     cJSON_AddNumberToObject(json, "trendSlope", snapshot.slope);
     cJSON_AddNumberToObject(json, "outlierRatio", snapshot.outlier_ratio);

@@ -25,6 +25,14 @@ RUN apt-get update \
 
 COPY . .
 
+# Force every compilation to use AddressSanitizer so *all* libraries are instrumented
+RUN mv /usr/bin/gcc /usr/bin/gcc.real && \
+    echo '#!/bin/sh\nexec /usr/bin/gcc.real -fsanitize=address -g -O1 "$@"' > /usr/bin/gcc && \
+    chmod +x /usr/bin/gcc
+RUN mv /usr/bin/g++ /usr/bin/g++.real && \
+    echo '#!/bin/sh\nexec /usr/bin/g++.real -fsanitize=address -g -O1 "$@"' > /usr/bin/g++ && \
+    chmod +x /usr/bin/g++
+
 RUN make -C lib/libttak clean
 RUN make -C .deps/cwist clean
 RUN make CWIST_SYSTEM_SQLITE=1
@@ -41,6 +49,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        libcurl4t64 \
        libnghttp2-14 \
+       libasan8 \
        nodejs \
        sqlite3 \
        gdb \

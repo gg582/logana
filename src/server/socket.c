@@ -156,6 +156,9 @@ static const char *logana_extract_job_id_from_path(const char *path, const char 
     if (!path || strncmp(path, prefix, prefix_len) != 0 || path_len <= prefix_len + suffix_len) return NULL;
     if (suffix_len > 0 && strcmp(path + path_len - suffix_len, suffix) != 0) return NULL;
     size_t id_len = path_len - prefix_len - suffix_len;
+    if (id_len > 0 && path[prefix_len + id_len - 1] == '/') {
+        id_len--; /* strip separator before suffix */
+    }
     if (id_len == 0 || id_len + 1 > buffer_size) return NULL;
     memcpy(buffer, path + prefix_len, id_len);
     buffer[id_len] = '\0';
