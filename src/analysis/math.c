@@ -82,7 +82,9 @@ static int logana_safe_strtod(const char *str, double *out, bool *out_valid, boo
 }
 
 static const char *logana_find_key_ci(const char *line, const char *key) {
+    if (!line || !key) return NULL;
     size_t key_len = strlen(key);
+    if (key_len == 0) return NULL;
     for (const char *p = line; *p; ++p) {
         if (*p != '"') continue;
         ++p;
@@ -618,17 +620,18 @@ void logana_compute_summary(logana_job_t *job) {
     for (size_t r = 0; r < rows; ++r) {
         bool primary_valid = (!job->matrix.valid_mask || job->matrix.valid_mask[r * dims]);
         double primary = job->matrix.values[r * dims];
-        if (primary_valid && isfinite(primary)) {
+        if (primary_valid && isfinite(primary) && fabs(primary) <= 1e15) {
             double bucket = 31.0 * (primary - primary_min) / primary_range;
             bucket = fmin(31.0, fmax(0.0, floor(bucket)));
             entropy_hist[(size_t)bucket] += 1.0;
         }
         double t = has_real_ts ? ((double)job->matrix.timestamps[r] - (double)min_ts) / 1000.0 : (double)r;
         double dt = t - t_mean;
-        if (primary_valid) { slope_num += dt * primary; slope_den += dt * dt; }
+        if (primary_valid && isfinite(primary) && fabs(primary) <= 1e15) { slope_num += dt * primary; slope_den += dt * dt; }
         for (size_t d = 0; d < dims; ++d) {
             if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
             double value = job->matrix.values[r * dims + d];
+            if (!isfinite(value) || fabs(value) > 1e15) continue;
             if (valid_counts[d] == 0) { job->summary.min[d] = value; job->summary.max[d] = value; }
             else { if (value < job->summary.min[d]) job->summary.min[d] = value; if (value > job->summary.max[d]) job->summary.max[d] = value; }
             job->summary.mean[d] += value;
@@ -649,7 +652,9 @@ void logana_compute_summary(logana_job_t *job) {
         size_t idx = 0;
         for (size_t r = 0; r < rows; ++r) {
             if (job->matrix.valid_mask && !job->matrix.valid_mask[r * dims + d]) continue;
-            vals[idx++] = job->matrix.values[r * dims + d];
+            double v = job->matrix.values[r * dims + d];
+            if (!isfinite(v) || fabs(v) > 1e15) continue;
+            vals[idx++] = v;
         }
         qsort(vals, n, sizeof(double), logana_compare_double);
         double median = vals[n / 2];

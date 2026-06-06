@@ -54,6 +54,7 @@ static int optics_fit(const logana_cluster_strategy_vtable_t *self,
     (void)self;
     size_t rows = matrix->row_count;
     if (!rows) return -1;
+    if (rows > 8192) rows = 8192;
     int *labels = calloc(rows, sizeof(int));
     bool *is_noise = calloc(rows, sizeof(bool));
     if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }

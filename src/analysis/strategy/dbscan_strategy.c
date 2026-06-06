@@ -9,6 +9,7 @@ static size_t run_dbscan(const logana_feature_matrix_t *matrix, double eps, size
                          const logana_analysis_summary_t *summary,
                          int *labels) {
     size_t rows = matrix->row_count;
+    if (rows > 8192) rows = 8192;
     size_t dims = matrix->dimensions;
     for (size_t i = 0; i < rows; ++i) labels[i] = -2;
     size_t cluster_id = 0;

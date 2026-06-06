@@ -47,6 +47,7 @@ export type FieldSchema = {
   max?: number;
   mean?: number;
   stddev?: number;
+  hasError?: boolean;
   uniqueValues: Set<string>;
   sampleValues: unknown[];
 };
@@ -100,7 +101,14 @@ function coerceValue(key: string, value: string): unknown {
 
   if (/^(true|false)$/i.test(unwrapped)) return unwrapped.toLowerCase() === "true";
   if (/^null$/i.test(unwrapped)) return null;
-  if (TIMESTAMP_KEYS.has(key.toLowerCase())) {
+
+  const lowerKey = key.toLowerCase();
+  /* Never coerce known categorical keys to numbers */
+  if (SEVERITY_KEYS.has(lowerKey) || ENTITY_KEYS.has(lowerKey) || MESSAGE_KEYS.has(lowerKey)) {
+    return unwrapped;
+  }
+
+  if (TIMESTAMP_KEYS.has(lowerKey)) {
     const parsed = Date.parse(unwrapped);
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -244,10 +252,16 @@ function buildFieldSchemas(rows: ParsedLogRow[]): FieldSchema[] {
       if (value === null) {
         s.nullCount++;
       } else if (typeof value === "number" && Number.isFinite(value)) {
-        s.numericCount++;
-        if (s.min === undefined || value < s.min) s.min = value;
-        if (s.max === undefined || value > s.max) s.max = value;
-        s.mean = (s.mean ?? 0) + value;
+        /* Rule: extreme values that would explode stats are treated as errors */
+        if (Math.abs(value) > 1e15) {
+          s.hasError = true;
+          s.nullCount++;
+        } else {
+          s.numericCount++;
+          if (s.min === undefined || value < s.min) s.min = value;
+          if (s.max === undefined || value > s.max) s.max = value;
+          s.mean = (s.mean ?? 0) + value;
+        }
       } else if (typeof value === "boolean") {
         s.boolCount++;
       } else if (typeof value === "string") {
@@ -396,9 +410,9 @@ export function parseLogStream(payload: string): ParsedLogDataset {
   const fieldSchemas = buildFieldSchemas(cleansedRows);
 
   const numericKeys = fieldSchemas
-    .filter((s) => s.numericCount >= Math.max(1, cleansedRows.length * 0.3))
+    .filter((s) => s.numericCount >= Math.max(1, cleansedRows.length * 0.3) && !s.hasError)
     .map((s) => s.key)
-    .filter((k) => !INTERNAL_NUMERIC_KEYS.has(k));
+    .filter((k) => !INTERNAL_NUMERIC_KEYS.has(k) && !SEVERITY_KEYS.has(k.toLowerCase()) && !ENTITY_KEYS.has(k.toLowerCase()));
 
   const stringKeys = fieldSchemas
     .filter((s) => s.stringCount > 0)

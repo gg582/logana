@@ -30,7 +30,6 @@ static int model_process(void *state, logana_pipeline_context_t *ctx) {
     int rc = logana_strategy_fit(strategy, &ctx->working_matrix, &ctx->summary, &out);
     if (rc != 0) return -1;
 
-    out.algorithm = job->algorithm;
     if (job->algorithm == LOGANA_ALGO_AUTO && out.algorithm == LOGANA_ALGO_AUTO) {
         out.algorithm = LOGANA_ALGO_FALLBACK_SCATTERPLOT;
     }

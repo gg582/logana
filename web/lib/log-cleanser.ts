@@ -17,8 +17,9 @@ import type { ParsedLogRow, FieldSchema } from "./log-parser";
 /* Configuration                                                              */
 /* -------------------------------------------------------------------------- */
 const MAX_DYNAMIC_FIELDS = 32;
-const SCALE_EXPLOSION_THRESHOLD = 1e37;
+const SCALE_EXPLOSION_THRESHOLD = 1e15;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER; /* 9007199254740991 */
+const COUNTER_MAX = 1e9;
 const MEMORY_MB_MAX = 1048576;                    /* 1 TiB in MiB */
 const CPU_MAX = 100.0;
 
@@ -208,7 +209,7 @@ function cleanseValue(key: string, value: unknown, anchor: TypeAnchor | undefine
       break;
     case "counter":
       if (v < 0) v = 0;
-      else if (v > MAX_SAFE_INTEGER) v = MAX_SAFE_INTEGER;
+      else if (v > COUNTER_MAX) v = COUNTER_MAX;
       break;
     default:
       break;

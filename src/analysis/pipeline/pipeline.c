@@ -11,6 +11,7 @@ static void logana_pipeline_free_matrix(logana_feature_matrix_t *m) {
     free(m->categories);
     free(m->formats);
     free(m->labels);
+    free(m->outlier_pressure);
     memset(m, 0, sizeof(*m));
 }
 

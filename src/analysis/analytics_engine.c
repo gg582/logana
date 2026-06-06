@@ -230,6 +230,7 @@ void logana_job_destroy(logana_job_t *job) {
     free(job->matrix.formats);
     free(job->matrix.labels);
     free(job->matrix.categories);
+    free(job->matrix.outlier_pressure);
     free(job->result.labels);
     free(job->result.is_noise);
     free(job->svg);

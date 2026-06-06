@@ -412,28 +412,100 @@ function scatterSvgMarkup(scatter: ScatterSeries) {
     </svg>`;
 }
 
+function wrapText(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
+  const lines: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    let breakIdx = maxChars;
+    if (remaining.length > maxChars) {
+      const window = remaining.slice(0, maxChars + 1);
+      const underscore = window.lastIndexOf("_");
+      const hyphen = window.lastIndexOf("-");
+      const dot = window.lastIndexOf(".");
+      const slash = window.lastIndexOf("/");
+      const candidates = [underscore, hyphen, dot, slash].filter((i) => i > 1 && i < maxChars);
+      if (candidates.length > 0) {
+        breakIdx = Math.max(...candidates) + 1;
+      } else {
+        // Try camelCase break
+        for (let k = maxChars; k > 1; k--) {
+          if (/[a-z][A-Z]/.test(window.slice(k - 1, k + 1))) {
+            breakIdx = k;
+            break;
+          }
+        }
+      }
+    }
+    lines.push(remaining.slice(0, breakIdx));
+    remaining = remaining.slice(breakIdx);
+  }
+  return lines;
+}
+
 function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   const width = 960;
   const height = 560;
   const right = 60;
   const bottom = 60;
+  const padding = 14; // padding between labels and grid
 
   const keys = Array.from(new Set(cells.flatMap((c) => [c.x, c.y]))).sort();
   if (keys.length === 0) return "";
 
   const maxLabelLen = Math.max(...keys.map((k) => k.length), 1);
-  const left = Math.max(170, maxLabelLen * 9 + 20);
-  const top = Math.max(120, keys.length > 8 ? 150 : 120);
+
+  // ── Pass 1: estimate margins so we can compute cellSize ──
+  let left = Math.max(150, maxLabelLen * 7 + padding + 16);
+  let top = Math.max(95, keys.length > 8 ? 125 : 95);
 
   const cellSize = Math.min(
     (width - left - right) / keys.length,
     (height - top - bottom) / keys.length,
     80,
   );
-  const innerW = cellSize * keys.length;
-  const innerH = cellSize * keys.length;
-  const labelFontSize = Math.max(7, Math.min(11, cellSize * 0.18));
-  const valueFontSize = Math.max(7, Math.min(11, cellSize * 0.16));
+
+  const labelFontSize = Math.max(7, Math.min(10, cellSize * 0.15));
+  const charWidth = labelFontSize * 0.58; // approx monospace char width
+  const lineHeight = labelFontSize * 1.25;
+
+  // ── Column labels: wrap to fit inside cell width ──
+  const colMaxChars = Math.max(3, Math.floor((cellSize - padding * 2) / charWidth));
+  const colWrapped = keys.map((k) => wrapText(k, colMaxChars));
+  const maxColLines = Math.max(1, ...colWrapped.map((l) => l.length));
+
+  // ── Row labels: wrap to fit inside left margin width ──
+  const rowMaxChars = Math.max(3, Math.floor((left - padding - 10) / charWidth));
+  const rowWrapped = keys.map((k) => wrapText(k, rowMaxChars));
+  const maxRowLineLen = Math.max(
+    1,
+    ...rowWrapped.flatMap((l) => l.map((s) => s.length)),
+  );
+  const maxRowLines = Math.max(1, ...rowWrapped.map((l) => l.length));
+
+  // ── Adjust margins based on actual wrapped text dimensions ──
+  top = Math.max(85, maxColLines * lineHeight + padding + 30);
+  left = Math.max(
+    140,
+    maxRowLineLen * charWidth + padding + 16,
+    maxRowLines * lineHeight + 10,
+  );
+
+  // ── Recompute cellSize with final margins ──
+  const finalCellSize = Math.min(
+    (width - left - right) / keys.length,
+    (height - top - bottom) / keys.length,
+    80,
+  );
+
+  // ── Value font size: auto-scale so "-0.99" fits inside the cell ──
+  const rawValueFontSize = Math.max(7, Math.min(10, finalCellSize * 0.15));
+  const valueCharWidth = rawValueFontSize * 0.58;
+  const typicalValue = "-0.99";
+  const valueFontSize =
+    typicalValue.length * valueCharWidth > finalCellSize - 10
+      ? Math.max(7, (finalCellSize - 10) / typicalValue.length / 0.58)
+      : rawValueFontSize;
 
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
@@ -452,28 +524,61 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
   const rects: string[] = [];
   for (let i = 0; i < keys.length; i++) {
     for (let j = 0; j < keys.length; j++) {
-      const x = left + j * cellSize;
-      const y = top + i * cellSize;
+      const x = left + j * finalCellSize;
+      const y = top + i * finalCellSize;
       if (i === j) {
-        rects.push(`<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="#2a1f1b" rx="6" />`);
-        rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">1</text>`);
+        rects.push(
+          `<rect x="${x}" y="${y}" width="${finalCellSize}" height="${finalCellSize}" fill="#2a1f1b" rx="6" />`,
+        );
+        rects.push(
+          `<text x="${x + finalCellSize / 2}" y="${y + finalCellSize / 2 + 5}" text-anchor="middle" fill="#8d7561" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">1</text>`,
+        );
         continue;
       }
-      const cell = cells.find((c) => (c.x === keys[i] && c.y === keys[j]) || (c.x === keys[j] && c.y === keys[i]));
+      const cell = cells.find(
+        (c) =>
+          (c.x === keys[i] && c.y === keys[j]) ||
+          (c.x === keys[j] && c.y === keys[i]),
+      );
       const value = cell?.value ?? 0;
-      rects.push(`<rect x="${x + 1}" y="${y + 1}" width="${cellSize - 2}" height="${cellSize - 2}" fill="${colorFor(value)}" rx="6" opacity="0.9" />`);
-      rects.push(`<text x="${x + cellSize / 2}" y="${y + cellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${value.toFixed(2)}</text>`);
+      rects.push(
+        `<rect x="${x + 1}" y="${y + 1}" width="${finalCellSize - 2}" height="${finalCellSize - 2}" fill="${colorFor(value)}" rx="6" opacity="0.9" />`,
+      );
+      rects.push(
+        `<text x="${x + finalCellSize / 2}" y="${y + finalCellSize / 2 + 5}" text-anchor="middle" fill="#fff" font-size="${valueFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${value.toFixed(2)}</text>`,
+      );
     }
   }
 
-  const labels = keys
+  // ── Column labels: horizontal, multi-line, centered with padding ──
+  const colLabels = keys
     .map((key, i) => {
-      const x = left + i * cellSize + cellSize / 2;
-      const y = top + i * cellSize + cellSize / 2;
-      return `
-        <text x="${x}" y="${top - 14}" text-anchor="end" transform="rotate(-45, ${x}, ${top - 14})" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
-        <text x="${left - 14}" y="${y + 4}" text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(key)}</text>
-      `;
+      const x = left + i * finalCellSize + finalCellSize / 2;
+      const lines = colWrapped[i];
+      const startY = top - padding - (lines.length - 1) * lineHeight;
+      const tspans = lines
+        .map(
+          (line, idx) =>
+            `<tspan x="${x}" dy="${idx === 0 ? startY : lineHeight}">${escapeXml(line)}</tspan>`,
+        )
+        .join("");
+      return `<text text-anchor="middle" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${tspans}</text>`;
+    })
+    .join("");
+
+  // ── Row labels: multi-line, right-aligned with padding ──
+  const rowLabels = keys
+    .map((key, i) => {
+      const y = top + i * finalCellSize + finalCellSize / 2;
+      const lines = rowWrapped[i];
+      const startY = y - ((lines.length - 1) * lineHeight) / 2 + 4;
+      const tspans = lines
+        .map(
+          (line, idx) =>
+            `<tspan x="${left - padding}" dy="${idx === 0 ? startY : lineHeight}">${escapeXml(line)}</tspan>`,
+        )
+        .join("");
+      return `<text text-anchor="end" fill="#b69774" font-size="${labelFontSize}" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${tspans}</text>`;
     })
     .join("");
 
@@ -489,7 +594,8 @@ function heatmapSvgMarkup(cells: CorrelationCell[], title: string) {
       <rect width="${width}" height="${height}" rx="34" fill="url(#bgGradient)" />
       <text x="${left}" y="48" fill="#f0eaff" font-size="28" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">${escapeXml(title)}</text>
       <text x="${left}" y="74" fill="#9b92c4" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">Numeric correlation matrix</text>
-      ${labels}
+      ${colLabels}
+      ${rowLabels}
       ${rects.join("")}
     </svg>`;
 }
@@ -1195,11 +1301,15 @@ function InteractiveClusterChart({
 
 function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
   const keys = useMemo(() => Array.from(new Set(cells.flatMap((c) => [c.x, c.y]))).sort(), [cells]);
-  const cellSize = Math.max(24, Math.min(56, 640 / Math.max(keys.length, 1)));
-  const width = 100 + keys.length * cellSize;
-  const height = 100 + keys.length * cellSize;
-  const labelFontSize = Math.max(9, Math.min(12, cellSize * 0.22));
-  const valueFontSize = Math.max(9, Math.min(11, cellSize * 0.2));
+  if (keys.length === 0) return null;
+
+  /* Ergonomic sizing: never let cells get so small that labels collide */
+  const cellSize = Math.max(52, Math.min(76, 780 / Math.max(keys.length, 1)));
+  const margin = 120;
+  const width = margin + keys.length * cellSize + 24;
+  const height = margin + keys.length * cellSize + 24;
+  const labelFontSize = Math.max(9, Math.min(11, cellSize * 0.19));
+  const valueFontSize = Math.max(8, Math.min(10, cellSize * 0.17));
 
   const colorFor = (v: number) => {
     const t = Math.max(0, Math.min(1, Math.abs(v)));
@@ -1219,10 +1329,27 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="correlation heatmap">
       {keys.map((key, i) => (
         <g key={`label-${key}`}>
-          <text x={100 + i * cellSize + cellSize / 2} y={90} textAnchor="middle" fill="#9b92c4" fontSize={labelFontSize} fontFamily="ui-monospace, monospace">
+          {/* Top labels: rotated -45° so they never overlap horizontally */}
+          <text
+            x={margin + i * cellSize + cellSize / 2}
+            y={margin - 10}
+            textAnchor="end"
+            fill="#9b92c4"
+            fontSize={labelFontSize}
+            fontFamily="ui-monospace, monospace"
+            transform={`rotate(-45, ${margin + i * cellSize + cellSize / 2}, ${margin - 10})`}
+          >
             {key}
           </text>
-          <text x={90} y={100 + i * cellSize + cellSize / 2 + 4} textAnchor="end" fill="#9b92c4" fontSize={labelFontSize} fontFamily="ui-monospace, monospace">
+          {/* Left labels: right-aligned with generous margin */}
+          <text
+            x={margin - 12}
+            y={margin + i * cellSize + cellSize / 2 + 4}
+            textAnchor="end"
+            fill="#9b92c4"
+            fontSize={labelFontSize}
+            fontFamily="ui-monospace, monospace"
+          >
             {key}
           </text>
         </g>
@@ -1231,8 +1358,8 @@ function HeatmapChart({ cells }: { cells: CorrelationCell[] }) {
         keys.map((kj, j) => {
           const cell = cells.find((c) => (c.x === ki && c.y === kj) || (c.x === kj && c.y === ki));
           const value = i === j ? 1 : cell?.value ?? 0;
-          const x = 100 + j * cellSize;
-          const y = 100 + i * cellSize;
+          const x = margin + j * cellSize;
+          const y = margin + i * cellSize;
           return (
             <g key={`${ki}-${kj}`}>
               <rect className="heatmap-cell" x={x + 1} y={y + 1} width={cellSize - 2} height={cellSize - 2} fill={colorFor(value)} rx={6} opacity={0.9} />
@@ -1385,7 +1512,11 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
               {s.numericCount > 0 && (
                 <div className="stats-metric">
                   <span>min / max / mean</span>
-                  <strong><FitText minFontSize={12}>{s.min?.toFixed(2)} / {s.max?.toFixed(2)} / {s.mean?.toFixed(2)}</FitText></strong>
+                  <strong>
+                    <FitText minFontSize={12}>
+                      {s.hasError ? "error" : `${s.min?.toFixed(2)} / ${s.max?.toFixed(2)} / ${s.mean?.toFixed(2)}`}
+                    </FitText>
+                  </strong>
                 </div>
               )}
               {s.stringCount > 0 && (

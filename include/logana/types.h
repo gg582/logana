@@ -12,7 +12,7 @@
 
 #define LOGANA_MAX_KEYS 16
 #define LOGANA_MAX_ROWS 2000000
-#define LOGANA_MAX_DIMENSIONS 8
+#define LOGANA_MAX_DIMENSIONS 32
 #define LOGANA_MAX_BATCH_JOBS 256
 #define LOGANA_MAX_JOBS 4096
 
@@ -111,6 +111,7 @@ typedef struct {
     size_t dimensions;
     int *labels;
     uint64_t *categories;        /* Per-row category hash for cardinality grouping */
+    double *outlier_pressure;    /* Preserves true magnitude for statistical outliers (Rule 3) */
 } logana_feature_matrix_t;
 
 typedef struct logana_job {

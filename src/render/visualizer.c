@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <ttak/async/task.h>
 
@@ -190,8 +191,33 @@ static cJSON *logana_build_report_context(const logana_job_snapshot_t *snapshot,
     return context;
 }
 
+static cwist_sstring *logana_safe_template_render_file(const char *template_path, const cJSON *context) {
+    FILE *f = fopen(template_path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long len = ftell(f);
+    if (len < 0 || len > 10 * 1024 * 1024) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t nread = fread(buf, 1, (size_t)len, f);
+    fclose(f);
+    if (nread != (size_t)len) { free(buf); return NULL; }
+    buf[len] = '\0';
+    cwist_sstring *result = cwist_template_render(buf, context);
+    free(buf);
+    return result;
+}
+
 static char *logana_render_template(const char *template_path, cJSON *context) {
-    cwist_sstring *rendered = cwist_template_render_file(template_path, context);
+    cwist_sstring *rendered = NULL;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        rendered = logana_safe_template_render_file(template_path, context);
+        if (rendered) break;
+        if (attempt < 3) {
+            usleep((1 << attempt) * 50000); /* 50ms, 100ms, 200ms backoff */
+        }
+    }
     if (!rendered) return NULL;
     char *copy = strdup(rendered->data ? rendered->data : "");
     cwist_sstring_destroy(rendered);

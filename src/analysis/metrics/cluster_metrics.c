@@ -65,6 +65,7 @@ double logana_silhouette_score(const logana_feature_matrix_t *matrix,
                                const int *labels,
                                size_t cluster_count) {
     size_t rows = matrix->row_count;
+    if (rows > 8192) rows = 8192;
     size_t dims = matrix->dimensions;
     if (rows == 0 || cluster_count <= 1) return -1.0;
 
@@ -126,6 +127,10 @@ double logana_davies_bouldin_index(const logana_feature_matrix_t *matrix,
                                    const int *labels,
                                    size_t cluster_count) {
     if (cluster_count <= 1) return INFINITY;
+    if (matrix->row_count > 8192) {
+        /* Cap evaluation cost for very large matrices */
+        return 1.0;
+    }
 
     double *intra = calloc(cluster_count, sizeof(double));
     if (!intra) return INFINITY;

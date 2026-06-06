@@ -7,8 +7,9 @@
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
 /* -------------------------------------------------------------------------- */
-#define LOGANA_CLAMP_INT64_MAX  9.223372036854776e18
-#define LOGANA_SCALE_EXPLODE    1e37
+#define LOGANA_CLAMP_INT64_MAX  1e15
+#define LOGANA_SCALE_EXPLODE    1e15
+#define LOGANA_COUNTER_MAX      1e9
 #define LOGANA_MEM_MB_MAX       1048576.0   /* 1 TiB in MiB */
 #define LOGANA_CPU_MAX          100.0
 
@@ -109,7 +110,7 @@ static void cleanse_cell(double *value, uint8_t *mask, metric_class_t mclass) {
         case METRIC_ACTIVE_USERS:
             /* Counters: no negative, clamp upper bound to prevent axis collapse */
             if (v < 0.0) *value = 0.0;
-            else if (v > LOGANA_CLAMP_INT64_MAX) *value = LOGANA_CLAMP_INT64_MAX;
+            else if (v > LOGANA_COUNTER_MAX) *value = LOGANA_COUNTER_MAX;
             break;
 
         default:

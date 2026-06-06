@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 typedef struct {
     const logana_cluster_strategy_vtable_t *strategy;
@@ -26,8 +27,13 @@ static int auto_run_candidate(const logana_cluster_strategy_vtable_t *strategy,
     out->valid = false;
     memset(&out->result, 0, sizeof(out->result));
     int rc = logana_strategy_fit(strategy, matrix, summary, &out->result);
-    if (rc != 0) return -1;
+    if (rc != 0) {
+        fprintf(stderr, "[auto] strategy %s fit failed (rc=%d)\n", strategy->name, rc);
+        return -1;
+    }
     if (out->result.cluster_count < 2 || out->result.cluster_count > matrix->row_count / 2) {
+        fprintf(stderr, "[auto] strategy %s rejected: cluster_count=%zu rows=%zu\n",
+                strategy->name, out->result.cluster_count, matrix->row_count);
         free(out->result.labels);
         free(out->result.is_noise);
         memset(&out->result, 0, sizeof(out->result));
@@ -81,16 +87,29 @@ static int auto_fit(const logana_cluster_strategy_vtable_t *self,
         logana_strategy_mean_shift(),
     };
 
+    size_t effective_rows = matrix->row_count > 8192 ? 8192 : matrix->row_count;
     for (size_t i = 0; i < sizeof(strategies) / sizeof(strategies[0]); ++i) {
+        /* Skip heavy O(n^2) strategies on large matrices before they burn CPU */
+        if (effective_rows > 4096 &&
+            (strcmp(strategies[i]->name, "dbscan") == 0 ||
+             strcmp(strategies[i]->name, "optics") == 0)) {
+            fprintf(stderr, "[auto] skipping %s on large matrix (rows=%zu)\n",
+                    strategies[i]->name, matrix->row_count);
+            continue;
+        }
         if (auto_run_candidate(strategies[i], matrix, summary, &candidates[cand_count]) == 0) {
             auto_score_candidate(&candidates[cand_count], matrix, summary);
             cand_count++;
         }
     }
+    fprintf(stderr, "[auto] cand_count=%zu rows=%zu dims=%zu\n",
+            cand_count, matrix->row_count, matrix->dimensions);
 
     if (cand_count == 0) {
         /* All failed — fallback */
-        return logana_strategy_fit(logana_strategy_fallback(), matrix, summary, out);
+        int rc = logana_strategy_fit(logana_strategy_fallback(), matrix, summary, out);
+        if (rc == 0) out->algorithm = LOGANA_ALGO_FALLBACK_SCATTERPLOT;
+        return rc;
     }
 
     size_t best_idx = 0;
@@ -108,7 +127,7 @@ static int auto_fit(const logana_cluster_strategy_vtable_t *self,
         if (i == best_idx) {
             *out = candidates[i].result;
             /* Mark algorithm as the winning strategy's algorithm */
-            if (out->algorithm == LOGANA_ALGO_AUTO) {
+            if (out->algorithm == LOGANA_ALGO_AUTO || out->algorithm == LOGANA_ALGO_KMEANS_PP) {
                 /* map strategy name back to enum heuristically */
                 const char *name = candidates[i].strategy->name;
                 if (strcmp(name, "dbscan") == 0) out->algorithm = LOGANA_ALGO_DBSCAN;
