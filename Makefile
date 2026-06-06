@@ -1,3 +1,5 @@
+MAKEFLAGS += -j
+
 CC       ?= gcc
 TARGET   := bin/logana-engine
 LIBTTAK  := lib/libttak/lib/libttak.a
