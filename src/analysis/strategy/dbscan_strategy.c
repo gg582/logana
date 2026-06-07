@@ -4,12 +4,15 @@
 #include <string.h>
 #include <math.h>
 
+#define LOGANA_DBSCAN_ROW_CAP 65536
+
 static size_t run_dbscan(const logana_feature_matrix_t *matrix, double eps, size_t min_samples,
                          logana_distance_fn_t dist_fn,
                          const logana_analysis_summary_t *summary,
                          int *labels) {
+    if (!matrix || !matrix->values || !labels || !dist_fn) return 0;
     size_t rows = matrix->row_count;
-    if (rows > 65536) rows = 65536;
+    if (rows > LOGANA_DBSCAN_ROW_CAP) rows = LOGANA_DBSCAN_ROW_CAP;
     size_t dims = matrix->dimensions;
     for (size_t i = 0; i < rows; ++i) labels[i] = -2;
     size_t cluster_id = 0;
@@ -17,17 +20,21 @@ static size_t run_dbscan(const logana_feature_matrix_t *matrix, double eps, size
         if (labels[i] != -2) continue;
         size_t count = 0;
         for (size_t j = 0; j < rows; ++j) {
-            if (dist_fn(matrix->values + i * dims, matrix->values + j * dims,
-                        matrix->valid_mask + i * dims, matrix->valid_mask + j * dims, dims, summary) <= eps)
-                count++;
+            double d = dist_fn(matrix->values + i * dims, matrix->values + j * dims,
+                               matrix->valid_mask ? matrix->valid_mask + i * dims : NULL,
+                               matrix->valid_mask ? matrix->valid_mask + j * dims : NULL,
+                               dims, summary);
+            if (d <= eps) count++;
         }
         if (count < min_samples) { labels[i] = -1; continue; }
         labels[i] = (int)cluster_id;
         for (size_t j = 0; j < rows; ++j) {
-            if (labels[j] == -2 &&
-                dist_fn(matrix->values + i * dims, matrix->values + j * dims,
-                        matrix->valid_mask + i * dims, matrix->valid_mask + j * dims, dims, summary) <= eps) {
-                labels[j] = (int)cluster_id;
+            if (labels[j] == -2) {
+                double d = dist_fn(matrix->values + i * dims, matrix->values + j * dims,
+                                   matrix->valid_mask ? matrix->valid_mask + i * dims : NULL,
+                                   matrix->valid_mask ? matrix->valid_mask + j * dims : NULL,
+                                   dims, summary);
+                if (d <= eps) labels[j] = (int)cluster_id;
             }
         }
         cluster_id++;
@@ -39,7 +46,7 @@ static int dbscan_fit(const logana_cluster_strategy_vtable_t *self,
                       const logana_feature_matrix_t *matrix,
                       const logana_analysis_summary_t *summary,
                       logana_cluster_result_t *out) {
-    (void)self;
+    if (!self || !matrix || !matrix->values || !out) return -1;
     size_t rows = matrix->row_count;
     if (!rows) return -1;
     int *labels = calloc(rows, sizeof(int));
@@ -48,14 +55,25 @@ static int dbscan_fit(const logana_cluster_strategy_vtable_t *self,
 
     logana_distance_fn_t dist_fn = logana_distance_euclidean_sq;
     size_t min_samples = 3;
-    if (rows > 100) min_samples = 5;
-    if (summary->cluster_options.has_dbscan_min_samples &&
-        summary->cluster_options.dbscan_min_samples > 0) {
+    if (summary && summary->cluster_options.has_dbscan_min_samples && summary->cluster_options.dbscan_min_samples > 0) {
         min_samples = summary->cluster_options.dbscan_min_samples;
+    } else if (matrix->dimensions > 0) {
+        size_t heuristic = matrix->dimensions + 1;
+        if (heuristic > 3) min_samples = heuristic;
     }
-    double eps = summary->cluster_options.has_dbscan_eps && summary->cluster_options.dbscan_eps > 0.0
-        ? summary->cluster_options.dbscan_eps
-        : logana_knee_detect_eps(matrix, min_samples, dist_fn, summary) * 1.05;
+    if (rows < min_samples) min_samples = rows > 0 ? rows : 1;
+
+    double eps = 1.0;
+    if (summary && summary->cluster_options.has_dbscan_eps && summary->cluster_options.dbscan_eps > 0.0) {
+        eps = summary->cluster_options.dbscan_eps;
+    } else {
+        eps = logana_knee_detect_eps(matrix, min_samples, dist_fn, summary);
+        double mult = (summary && summary->cluster_options.has_dbscan_eps_multiplier)
+                          ? summary->cluster_options.dbscan_eps_multiplier
+                          : 1.05;
+        if (mult > 0.0 && isfinite(mult)) eps *= mult;
+    }
+    if (eps <= 0.0 || !isfinite(eps)) eps = 1e-6;
 
     size_t clusters = run_dbscan(matrix, eps, min_samples, dist_fn, summary, labels);
 

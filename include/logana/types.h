@@ -78,6 +78,42 @@ typedef struct {
     /* Agglomerative */
     size_t agglomerative_target_clusters;
     bool has_agglomerative_target_clusters;
+
+    /* ------------------------------------------------------------------ */
+    /* Dynamic / scale-dependent thresholds (replaces hard-coded magic    */
+    /* numbers scattered across strategies and math modules).             */
+    /* ------------------------------------------------------------------ */
+
+    /* Mean-shift: merge two modes if squared distance is below this
+     * fraction of the bandwidth. Default: derived from data scale. */
+    double mean_shift_merge_threshold;
+    bool   has_mean_shift_merge_threshold;
+
+    /* BIRCH: when no explicit threshold is given, use
+     * median_pairwise_distance * birch_auto_threshold. Default 0.5. */
+    double birch_auto_threshold;
+    bool   has_birch_auto_threshold;
+
+    /* Outlier detection: z-score squared threshold.
+     * Default corresponds to ~3 sigma (9.0). */
+    double outlier_zscore_threshold;
+    bool   has_outlier_zscore_threshold;
+
+    /* Winsorization / MAD boundary: multiplier for sigma estimation.
+     * Default 5.0. */
+    double winsorize_sigma_multiplier;
+    bool   has_winsorize_sigma_multiplier;
+
+    /* Floor for stddev used to prevent division-by-zero in z-score
+     * distances and outlier scoring.  Expressed as a fraction of the
+     * dynamic range (max - min) per dimension.  Default 1e-4. */
+    double min_stddev_fraction;
+    bool   has_min_stddev_fraction;
+
+    /* DBSCAN/OPTICS eps multiplier when knee detection is used.
+     * Default 1.05 for DBSCAN, 1.2 for OPTICS. */
+    double dbscan_eps_multiplier;
+    bool   has_dbscan_eps_multiplier;
 } logana_cluster_options_t;
 
 typedef struct {

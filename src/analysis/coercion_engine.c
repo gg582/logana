@@ -15,6 +15,7 @@
 /* -------------------------------------------------------------------------- */
 
 static bool is_boolean_true(const char *s) {
+    if (!s) return false;
     return (strcmp(s, "true") == 0 || strcmp(s, "TRUE") == 0 ||
             strcmp(s, "True") == 0 || strcmp(s, "yes") == 0 ||
             strcmp(s, "YES") == 0 || strcmp(s, "Yes") == 0 ||
@@ -22,6 +23,7 @@ static bool is_boolean_true(const char *s) {
 }
 
 static bool is_boolean_false(const char *s) {
+    if (!s) return false;
     return (strcmp(s, "false") == 0 || strcmp(s, "FALSE") == 0 ||
             strcmp(s, "False") == 0 || strcmp(s, "no") == 0 ||
             strcmp(s, "NO") == 0 || strcmp(s, "No") == 0 ||
@@ -59,21 +61,15 @@ static bool is_numeric_trap_token(const char *s) {
     return false;
 }
 
-/* Aggressive continuous-digit filtering.
- * Scans for the first embedded numeric sequence (supports decimal, leading +/-).
- * Strips common unit suffixes.
- */
 static bool extract_leading_number(const char *raw, double *out) {
-    if (!raw || !*raw) return false;
+    if (!raw || !*raw || !out) return false;
     const char *p = raw;
     while (*p && (isspace((unsigned char)*p) || *p == '"' || *p == '\'')) ++p;
     if (!*p) return false;
 
-    /* Try direct strtod first */
     char *end = NULL;
     double val = strtod(p, &end);
     if (end != p && isfinite(val)) {
-        /* Validate trailing chars are benign */
         bool ok = true;
         for (const char *t = end; *t; ++t) {
             if (!isspace((unsigned char)*t) && *t != '"' && *t != '\'' &&
@@ -89,7 +85,6 @@ static bool extract_leading_number(const char *raw, double *out) {
         }
     }
 
-    /* Embedded digit extraction: scan for a digit or sign+digit pattern */
     for (const char *s = p; *s; ++s) {
         if (isdigit((unsigned char)*s) || ((*s == '-' || *s == '+') && isdigit((unsigned char)s[1]))) {
             char *e2 = NULL;
@@ -103,8 +98,8 @@ static bool extract_leading_number(const char *raw, double *out) {
     return false;
 }
 
-/* Strip common unit suffixes in-place on a copied buffer */
 static void strip_unit_suffixes(char *buf) {
+    if (!buf) return;
     size_t len = strlen(buf);
     if (len == 0) return;
     static const char *suffs[] = {
@@ -130,13 +125,13 @@ static void strip_unit_suffixes(char *buf) {
 
 double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
                             char *out_categorical, size_t cat_cap) {
+    if (!out_is_numeric) return 0.0;
     if (!raw) {
         *out_is_numeric = false;
         if (out_categorical && cat_cap) out_categorical[0] = '\0';
         return 0.0;
     }
 
-    /* Trim outer quotes and whitespace into a scratch buffer */
     char scratch[LOGANA_COERCION_MAX_STRING_LEN];
     size_t rp = 0;
     while (raw[rp] && (isspace((unsigned char)raw[rp]) || raw[rp] == '"' || raw[rp] == '\'')) ++rp;
@@ -153,7 +148,6 @@ double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
         return 0.0;
     }
 
-    /* Boolean mapping */
     if (is_boolean_true(scratch)) {
         *out_is_numeric = true;
         if (out_categorical && cat_cap) out_categorical[0] = '\0';
@@ -165,7 +159,6 @@ double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
         return 0.0;
     }
 
-    /* Numeric trap detection (NaN, Infinity, -999999 placeholders) */
     if (is_numeric_trap_token(scratch)) {
         *out_is_numeric = false;
         if (out_categorical && cat_cap) {
@@ -177,7 +170,6 @@ double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
         return 0.0;
     }
 
-    /* Try stripping suffixes and parsing */
     char suff_stripped[LOGANA_COERCION_MAX_STRING_LEN];
     memcpy(suff_stripped, scratch, rlen + 1);
     strip_unit_suffixes(suff_stripped);
@@ -189,7 +181,6 @@ double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
         return val;
     }
 
-    /* Fallback: return as categorical */
     *out_is_numeric = false;
     if (out_categorical && cat_cap) {
         size_t cl = strlen(scratch);
@@ -204,10 +195,6 @@ double logana_coerce_scalar(const char *raw, bool *out_is_numeric,
 /* Rule 4: Nested array/object flattening                                     */
 /* -------------------------------------------------------------------------- */
 
-/* Iteratively unwrap cJSON nesting until a primitive is found.
- * Returns a borrowed reference (do NOT delete).
- * If the nest is empty or entirely unresolvable, returns NULL.
- */
 static cJSON *flatten_cjson_item(cJSON *item) {
     if (!item) return NULL;
     cJSON *cur = item;
@@ -234,7 +221,7 @@ static cJSON *flatten_cjson_item(cJSON *item) {
 /* -------------------------------------------------------------------------- */
 
 static void histogram_ensure_capacity(logana_coercion_histogram_t *hist, size_t need) {
-    if (need <= hist->capacity) return;
+    if (!hist || need <= hist->capacity) return;
     size_t new_cap = hist->capacity ? hist->capacity * 2 : 16;
     while (new_cap < need) new_cap *= 2;
     logana_coercion_hist_entry_t *n = realloc(hist->entries, new_cap * sizeof(*n));
@@ -245,6 +232,7 @@ static void histogram_ensure_capacity(logana_coercion_histogram_t *hist, size_t 
 
 static void histogram_increment(logana_coercion_histogram_t *hist,
                                 const char *key, const char *value) {
+    if (!hist || !value) return;
     (void)key;
     for (size_t i = 0; i < hist->count; ++i) {
         if (strcmp(hist->entries[i].value, value) == 0) {
@@ -255,7 +243,8 @@ static void histogram_increment(logana_coercion_histogram_t *hist,
     histogram_ensure_capacity(hist, hist->count + 1);
     if (hist->count >= hist->capacity) return;
     logana_coercion_hist_entry_t *e = &hist->entries[hist->count++];
-    snprintf(e->key, sizeof(e->key), "%s", key);
+    if (key) snprintf(e->key, sizeof(e->key), "%s", key);
+    else e->key[0] = '\0';
     snprintf(e->value, sizeof(e->value), "%s", value);
     e->count = 1;
 }
@@ -265,6 +254,7 @@ static void histogram_increment(logana_coercion_histogram_t *hist,
 /* -------------------------------------------------------------------------- */
 
 int logana_coercion_init(logana_coercion_context_t *ctx) {
+    if (!ctx) return -1;
     memset(ctx, 0, sizeof(*ctx));
     ctx->row_capacity = LOGANA_COERCION_INITIAL_ROW_CAP;
     size_t cells = ctx->row_capacity * LOGANA_COERCION_MAX_TRACKED_KEYS;
@@ -297,6 +287,7 @@ void logana_coercion_destroy(logana_coercion_context_t *ctx) {
 }
 
 static bool grow_context_buffers(logana_coercion_context_t *ctx, size_t new_cap) {
+    if (!ctx) return false;
     size_t old_cap = ctx->row_capacity;
     size_t old_cells = old_cap * LOGANA_COERCION_MAX_TRACKED_KEYS;
     size_t new_cells = new_cap * LOGANA_COERCION_MAX_TRACKED_KEYS;
@@ -332,21 +323,15 @@ static bool grow_context_buffers(logana_coercion_context_t *ctx, size_t new_cap)
 static int find_or_register_key(logana_coercion_context_t *ctx,
                                 logana_engine_t *engine,
                                 const char *key) {
-    if (!key || !*key) return -1;
-    /* Search existing */
+    if (!key || !*key || !ctx) return -1;
     for (size_t i = 0; i < ctx->key_count; ++i) {
         if (strcmp(ctx->keys[i], key) == 0) return (int)i;
     }
-    /* Check configured keys for canonical ordering priority */
     for (size_t i = 0; i < ctx->key_count; ++i) {
         if (engine && strcasecmp(ctx->keys[i], key) == 0) {
-            if (strcmp(ctx->keys[i], key) != 0) {
-                /* case variant: keep original registration */
-            }
             return (int)i;
         }
     }
-    /* Hard limit: 32 tracking matrices */
     if (ctx->key_count >= LOGANA_COERCION_MAX_TRACKED_KEYS) {
         return -1;
     }
@@ -359,13 +344,12 @@ static int find_or_register_key(logana_coercion_context_t *ctx,
 
 static void append_overflow(logana_coercion_context_t *ctx,
                             const char *key, const char *raw_value) {
-    if (!key || !raw_value) return;
+    if (!ctx || !key || !raw_value) return;
     char pair[512];
     int n = snprintf(pair, sizeof(pair), "%s=%s;", key, raw_value);
     if (n <= 0 || (size_t)n >= sizeof(pair)) return;
     size_t need = ctx->overflow_len + (size_t)n;
     if (need >= LOGANA_COERCION_MAX_OVERFLOW_LEN) {
-        /* Overflow of overflow: truncate with marker */
         if (ctx->overflow_len + 3 < LOGANA_COERCION_MAX_OVERFLOW_LEN) {
             memcpy(ctx->overflow + ctx->overflow_len, "...", 3);
             ctx->overflow_len += 3;
@@ -384,9 +368,8 @@ static void append_overflow(logana_coercion_context_t *ctx,
 
 extern uint64_t logana_hash64(const void *data, size_t len);
 
-/* Copied from math.c because the original is file-static */
 static int coercion_normalize_timestamp(const char *str, uint64_t *out_ms) {
-    if (!str || !*str) return 0;
+    if (!str || !*str || !out_ms) return 0;
     while (*str && (isspace((unsigned char)*str) || *str == '"' || *str == '\'' || *str == ':')) ++str;
     if (!*str) return 0;
     const char *token_end = str;
@@ -444,6 +427,7 @@ static int coercion_normalize_timestamp(const char *str, uint64_t *out_ms) {
 /* -------------------------------------------------------------------------- */
 
 static void reset_row_scratch(logana_coercion_context_t *ctx) {
+    if (!ctx) return;
     for (size_t i = 0; i < LOGANA_COERCION_MAX_TRACKED_KEYS; ++i) {
         ctx->row_values[i] = 0.0;
         ctx->row_valid[i] = 0;
@@ -455,15 +439,14 @@ static void process_scalar_value(logana_coercion_context_t *ctx,
                                  const char *key,
                                  const char *raw_value,
                                  size_t row) {
+    if (!ctx || !key) return;
     (void)engine; (void)row;
     int idx = find_or_register_key(ctx, engine, key);
     if (idx < 0) {
-        /* Rule 5: overflow gate */
         append_overflow(ctx, key, raw_value);
         return;
     }
 
-    /* Known categorical keys must never be coerced to numeric */
     if (is_categorical_key(key)) {
         ctx->meta[idx].categorical_hits++;
         if (raw_value && raw_value[0]) {
@@ -483,15 +466,12 @@ static void process_scalar_value(logana_coercion_context_t *ctx,
         ctx->row_valid[idx] = 1;
         ctx->meta[idx].numeric_hits++;
     } else {
-        /* Rule 2: categorical routing */
         ctx->meta[idx].categorical_hits++;
         if (categorical[0]) {
-            /* Ensure histogram exists for this key */
             size_t hidx = (size_t)idx;
             if (hidx >= ctx->histogram_count) ctx->histogram_count = hidx + 1;
             histogram_increment(&ctx->histograms[hidx], key, categorical);
         }
-        /* Numeric slot stays invalid for this row */
     }
 }
 
@@ -500,15 +480,14 @@ static void process_cjson_item(logana_coercion_context_t *ctx,
                                const char *key,
                                cJSON *item,
                                size_t row) {
+    if (!ctx || !key || !item) return;
     (void)row;
-    /* Rule 4: flatten nesting */
     cJSON *flat = flatten_cjson_item(item);
     if (!flat) {
-        /* Empty nest: substitute 0 / preserve last known valid */
         int idx = find_or_register_key(ctx, engine, key);
         if (idx >= 0) {
             ctx->row_values[idx] = 0.0;
-            ctx->row_valid[idx] = 1; /* zero is a valid substitute */
+            ctx->row_valid[idx] = 1;
             ctx->meta[idx].numeric_hits++;
         }
         return;
@@ -517,7 +496,6 @@ static void process_cjson_item(logana_coercion_context_t *ctx,
     if (cJSON_IsNumber(flat)) {
         double v = flat->valuedouble;
         if (!isfinite(v)) {
-            /* Treat non-finite as categorical trap */
             int idx = find_or_register_key(ctx, engine, key);
             if (idx >= 0) {
                 ctx->meta[idx].categorical_hits++;
@@ -525,7 +503,6 @@ static void process_cjson_item(logana_coercion_context_t *ctx,
             }
             return;
         }
-        /* Known categorical keys must stay categorical even if JSON holds a number */
         if (is_categorical_key(key)) {
             int idx = find_or_register_key(ctx, engine, key);
             if (idx >= 0) {
@@ -553,7 +530,6 @@ static void process_cjson_item(logana_coercion_context_t *ctx,
     } else if (cJSON_IsNull(flat)) {
         /* Null is neither numeric nor categorical; just leave invalid */
     } else {
-        /* Should not happen after flattening, but guard anyway */
         int idx = find_or_register_key(ctx, engine, key);
         if (idx >= 0) {
             ctx->meta[idx].categorical_hits++;
@@ -571,6 +547,7 @@ static void discover_text_pairs(const char *line,
                                 char values[][LOGANA_COERCION_MAX_STRING_LEN],
                                 size_t *count,
                                 size_t max_count) {
+    if (!line || !count || !keys || !values) return;
     const char *p = line;
     *count = 0;
     while (*p && *count < max_count) {
@@ -622,6 +599,7 @@ static void discover_text_pairs(const char *line,
 static void process_text_line(logana_coercion_context_t *ctx,
                               logana_engine_t *engine,
                               const char *line) {
+    if (!ctx || !line) return;
     char tkeys[LOGANA_COERCION_MAX_TRACKED_KEYS][64];
     char tvals[LOGANA_COERCION_MAX_TRACKED_KEYS][LOGANA_COERCION_MAX_STRING_LEN];
     size_t tcount = 0;
@@ -632,22 +610,25 @@ static void process_text_line(logana_coercion_context_t *ctx,
 }
 
 /* -------------------------------------------------------------------------- */
-/* Timestamp extraction (reuses existing logic via engine config)             */
+/* Timestamp extraction                                                       */
 /* -------------------------------------------------------------------------- */
 
+static const char *ci_strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return NULL;
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; ++p) {
+        if (strncasecmp(p, needle, nlen) == 0) return p;
+    }
+    return NULL;
+}
+
 static uint64_t extract_row_timestamp(logana_engine_t *engine, const char *line) {
+    if (!engine || !line) return 0;
     uint64_t ts_ms = 0;
     bool ts_found = false;
     for (size_t t = 0; t < engine->config.timestamp_key_count; ++t) {
         const char *tk = engine->config.timestamp_keys[t];
-        const char *found = engine->config.case_sensitive ? strstr(line, tk) : NULL;
-        if (!found && !engine->config.case_sensitive) {
-            /* simple CI search */
-            size_t tlen = strlen(tk);
-            for (const char *p = line; *p; ++p) {
-                if (strncasecmp(p, tk, tlen) == 0) { found = p; break; }
-            }
-        }
+        const char *found = engine->config.case_sensitive ? strstr(line, tk) : ci_strstr(line, tk);
         if (found) {
             const char *colon = strchr(found, ':');
             if (colon && coercion_normalize_timestamp(colon + 1, &ts_ms)) {
@@ -661,21 +642,16 @@ static uint64_t extract_row_timestamp(logana_engine_t *engine, const char *line)
 }
 
 /* -------------------------------------------------------------------------- */
-/* Category hash for row (concatenate configured category keys)               */
+/* Category hash for row                                                      */
 /* -------------------------------------------------------------------------- */
 
 static uint64_t extract_row_category(logana_engine_t *engine, const char *line) {
+    if (!engine || !line) return 0;
     char cat_buf[256] = {0};
     size_t cat_off = 0;
     for (size_t c = 0; c < engine->config.category_key_count; ++c) {
         const char *ck = engine->config.category_keys[c];
-        const char *found = engine->config.case_sensitive ? strstr(line, ck) : NULL;
-        if (!found && !engine->config.case_sensitive) {
-            size_t clen = strlen(ck);
-            for (const char *p = line; *p; ++p) {
-                if (strncasecmp(p, ck, clen) == 0) { found = p; break; }
-            }
-        }
+        const char *found = engine->config.case_sensitive ? strstr(line, ck) : ci_strstr(line, ck);
         if (found) {
             const char *colon = strchr(found, ':');
             if (colon) {
@@ -750,7 +726,6 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
                 }
             }
 
-            /* Format detection */
             const char *p = cursor;
             while (*p && isspace((unsigned char)*p)) ++p;
             if (*p == '{' || *p == '[') ctx->formats[ctx->row_count] = 0;
@@ -773,7 +748,6 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
                             }
                         }
                     } else if (cJSON_IsArray(root) && cJSON_GetArraySize(root) > 0) {
-                        /* Top-level array: treat indices as keys? No, flatten first element */
                         cJSON *first = cJSON_GetArrayItem(root, 0);
                         if (first && cJSON_IsObject(first)) {
                             cJSON *child = NULL;
@@ -786,14 +760,12 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
                     }
                     cJSON_Delete(root);
                 } else {
-                    /* Invalid JSON fallback to text */
                     process_text_line(ctx, engine, cursor);
                 }
             } else {
                 process_text_line(ctx, engine, cursor);
             }
 
-            /* Flush row scratch into dense buffers */
             size_t base = ctx->row_count * LOGANA_COERCION_MAX_TRACKED_KEYS;
             for (size_t d = 0; d < LOGANA_COERCION_MAX_TRACKED_KEYS; ++d) {
                 ctx->values[base + d] = ctx->row_values[d];
@@ -826,6 +798,7 @@ static int compare_double_ptr(const void *a, const void *b) {
 }
 
 static void compute_column_stats(logana_coercion_context_t *ctx, size_t col) {
+    if (!ctx || col >= LOGANA_COERCION_MAX_TRACKED_KEYS) return;
     logana_coercion_key_meta_t *m = &ctx->meta[col];
     size_t n = 0;
     for (size_t r = 0; r < ctx->row_count; ++r) {
@@ -839,9 +812,14 @@ static void compute_column_stats(logana_coercion_context_t *ctx, size_t col) {
     double *tmp = malloc(n * sizeof(double));
     if (!tmp) { m->is_active = false; return; }
     size_t idx = 0;
+    double col_min = INFINITY;
+    double col_max = -INFINITY;
     for (size_t r = 0; r < ctx->row_count; ++r) {
         if (ctx->valid_mask[r * LOGANA_COERCION_MAX_TRACKED_KEYS + col]) {
-            tmp[idx++] = ctx->values[r * LOGANA_COERCION_MAX_TRACKED_KEYS + col];
+            double v = ctx->values[r * LOGANA_COERCION_MAX_TRACKED_KEYS + col];
+            tmp[idx++] = v;
+            if (v < col_min) col_min = v;
+            if (v > col_max) col_max = v;
         }
     }
     qsort(tmp, n, sizeof(double), compare_double_ptr);
@@ -850,24 +828,25 @@ static void compute_column_stats(logana_coercion_context_t *ctx, size_t col) {
     if ((n % 2) == 0 && n > 1) median = (tmp[n / 2 - 1] + tmp[n / 2]) * 0.5;
     m->median = median;
 
-    /* IQR */
     size_t q1_idx = n / 4;
     size_t q3_idx = (3 * n) / 4;
     double q1 = tmp[q1_idx];
     double q3 = tmp[q3_idx];
     m->iqr = q3 - q1;
 
-    /* MAD */
     for (size_t i = 0; i < n; ++i) tmp[i] = fabs(tmp[i] - median);
     qsort(tmp, n, sizeof(double), compare_double_ptr);
     double mad = tmp[n / 2];
     if ((n % 2) == 0 && n > 1) mad = (tmp[n / 2 - 1] + tmp[n / 2]) * 0.5;
     m->mad = mad;
 
-    double mad_sigma = mad > 0.0001 ? mad * 1.4826 : 0.0001;
-    double iqr_span = m->iqr > 0.0001 ? m->iqr : mad_sigma;
+    double range = (col_max > col_min && isfinite(col_max - col_min)) ? (col_max - col_min) : 1.0;
+    double min_floor = range * 1e-4;
+    if (min_floor <= 0.0 || !isfinite(min_floor)) min_floor = 1e-4;
 
-    /* Use the wider bound of IQR-based or MAD-based to be conservative */
+    double mad_sigma = mad > min_floor ? mad * 1.4826 : min_floor;
+    double iqr_span = m->iqr > min_floor ? m->iqr : mad_sigma;
+
     double bound_iqr = 5.0 * iqr_span;
     double bound_mad = 5.0 * mad_sigma;
     double bound = bound_iqr > bound_mad ? bound_iqr : bound_mad;
@@ -879,11 +858,11 @@ static void compute_column_stats(logana_coercion_context_t *ctx, size_t col) {
 }
 
 static void apply_winsorization(logana_coercion_context_t *ctx) {
+    if (!ctx) return;
     for (size_t c = 0; c < ctx->key_count; ++c) {
         compute_column_stats(ctx, c);
         if (!ctx->meta[c].is_active) continue;
 
-        /* Rule 2: if zero numeric hits, deactivate column */
         if (ctx->meta[c].numeric_hits == 0) {
             ctx->meta[c].is_active = false;
             continue;
@@ -896,9 +875,7 @@ static void apply_winsorization(logana_coercion_context_t *ctx) {
             if (!ctx->valid_mask[idx]) continue;
             double v = ctx->values[idx];
             if (v < lb || v > ub) {
-                /* Preserve true magnitude in outlier_pressure */
                 ctx->outlier_pressure[idx] = v;
-                /* Clip to boundary for global stats */
                 if (v < lb) ctx->values[idx] = lb;
                 else ctx->values[idx] = ub;
             } else {
@@ -917,10 +894,8 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
     if (!ctx || !job) return -1;
     if (ctx->row_count == 0) return 0;
 
-    /* Apply statistical boundary boxing before export */
     apply_winsorization(ctx);
 
-    /* Count active dimensions */
     size_t active_dims = 0;
     size_t col_map[LOGANA_COERCION_MAX_TRACKED_KEYS];
     for (size_t c = 0; c < ctx->key_count; ++c) {
@@ -932,20 +907,18 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
     }
 
     if (active_dims == 0) {
-        /* Fallback: synthesize a single dimension */
         active_dims = 1;
         if (ctx->key_count > 0) {
             for (size_t c = 0; c < ctx->key_count; ++c) {
                 if (ctx->meta[c].categorical_hits > 0) { col_map[c] = 0; break; }
             }
-            /* If still none, just use first slot */
             if (col_map[0] == (size_t)-1) col_map[0] = 0;
         }
     }
 
     size_t cells = ctx->row_count * active_dims;
-    double  *values = malloc(cells * sizeof(double));
-    uint8_t *valid_mask = malloc(cells * sizeof(uint8_t));
+    double  *values = calloc(cells, sizeof(double));
+    uint8_t *valid_mask = calloc(cells, sizeof(uint8_t));
     double  *pressure = calloc(cells, sizeof(double));
     uint64_t *timestamps = malloc(ctx->row_count * sizeof(uint64_t));
     uint64_t *categories = malloc(ctx->row_count * sizeof(uint64_t));
@@ -959,10 +932,6 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
         timestamps[r] = ctx->timestamps[r];
         categories[r] = ctx->categories[r];
         formats[r] = ctx->formats[r];
-        for (size_t d = 0; d < active_dims; ++d) {
-            values[r * active_dims + d] = 0.0;
-            valid_mask[r * active_dims + d] = 0;
-        }
     }
 
     for (size_t c = 0; c < ctx->key_count; ++c) {
@@ -976,15 +945,12 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
                 valid_mask[dst_idx] = 1;
                 pressure[dst_idx] = ctx->outlier_pressure[src_idx];
             } else if (active_dims == 1 && ctx->meta[c].categorical_hits > 0) {
-                /* Synthetic fallback for purely categorical key in 1-dim mode */
                 values[dst_idx] = 0.0;
                 valid_mask[dst_idx] = 0;
             }
         }
     }
 
-    /* If every row ended up invalid in the only dimension, synthesize
-       from timestamp hash so downstream stages don't choke on an empty matrix. */
     if (active_dims == 1) {
         bool any_valid = false;
         for (size_t r = 0; r < ctx->row_count; ++r) {
@@ -998,7 +964,6 @@ int logana_coercion_export_matrix(logana_coercion_context_t *ctx, logana_job_t *
         }
     }
 
-    /* Transfer ownership to job */
     free(job->matrix.values);
     free(job->matrix.valid_mask);
     free(job->matrix.outlier_pressure);

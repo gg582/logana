@@ -7,14 +7,19 @@ static int fallback_fit(const logana_cluster_strategy_vtable_t *self,
                         const logana_feature_matrix_t *matrix,
                         const logana_analysis_summary_t *summary,
                         logana_cluster_result_t *out) {
-    (void)self; (void)summary;
+    if (!self || !matrix || !out) return -1;
+    (void)summary; /* fallback does not require summary statistics */
     size_t rows = matrix->row_count;
-    int *labels = calloc(rows, sizeof(int));
-    bool *is_noise = calloc(rows, sizeof(bool));
-    if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }
-    for (size_t i = 0; i < rows; ++i) {
-        labels[i] = -1;
-        is_noise[i] = true;
+    int *labels = NULL;
+    bool *is_noise = NULL;
+    if (rows > 0) {
+        labels = calloc(rows, sizeof(int));
+        is_noise = calloc(rows, sizeof(bool));
+        if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }
+        for (size_t i = 0; i < rows; ++i) {
+            labels[i] = -1;
+            is_noise[i] = true;
+        }
     }
     out->labels = labels;
     out->is_noise = is_noise;

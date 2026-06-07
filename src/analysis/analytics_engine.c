@@ -16,6 +16,7 @@ static void logana_log_sink(ttak_log_level_t level, const char *msg) {
 }
 
 static void logana_set_job_status(logana_job_t *job, logana_job_status_t status, const char *error) {
+    if (!job) return;
     if (error) {
         snprintf(job->error, sizeof(job->error), "%s", error);
     }
@@ -39,6 +40,7 @@ void logana_job_unref(logana_job_t *job) {
 /* -------------------------------------------------------------------------- */
 
 static uint64_t logana_compute_fingerprint(const logana_job_t *job, size_t rows, size_t active_dims) {
+    if (!job || !job->payload) return 0;
     size_t sample = job->payload_size > 1024 ? 1024 : job->payload_size;
     uint64_t h = logana_hash64(job->payload, sample);
     h ^= (uint64_t)rows * 0x9e3779b97f4a7c15ULL;
@@ -49,6 +51,7 @@ static uint64_t logana_compute_fingerprint(const logana_job_t *job, size_t rows,
 
 static void logana_auto_cache_insert(logana_engine_t *engine, uint64_t fp,
                                      logana_algorithm_t selected, uint64_t now_ms) {
+    if (!engine) return;
     size_t count = atomic_load_explicit(&engine->auto_cache_count, memory_order_relaxed);
     if (count < LOGANA_MAX_AUTO_CACHE) {
         size_t idx = atomic_fetch_add_explicit(&engine->auto_cache_count, 1, memory_order_acq_rel);
@@ -98,6 +101,7 @@ static inline void seqlock_write_end(_Atomic uint32_t *seq) {
 /* -------------------------------------------------------------------------- */
 
 int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
+    if (!engine || !job) return -1;
     logana_set_job_status(job, LOGANA_JOB_ANALYZING, NULL);
 
     logana_pipeline_context_t ctx = {0};
@@ -133,6 +137,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
 /* -------------------------------------------------------------------------- */
 
 static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
+    if (!engine || !job) return false;
     logana_job_t *to_remove = NULL;
 
     seqlock_write_begin(&engine->jobs_seq);
@@ -169,6 +174,7 @@ static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
 }
 
 logana_job_t *logana_engine_find_job(logana_engine_t *engine, uint64_t job_id) {
+    if (!engine) return NULL;
     while (true) {
         uint32_t seq = seqlock_read_begin(&engine->jobs_seq);
         size_t count = atomic_load_explicit(&engine->job_count, memory_order_acquire);
@@ -188,28 +194,44 @@ logana_job_t *logana_engine_find_job(logana_engine_t *engine, uint64_t job_id) {
 }
 
 int logana_engine_init(logana_engine_t *engine, const logana_config_t *config) {
+    if (!engine || !config) return -1;
     memset(engine, 0, sizeof(*engine));
     engine->config = *config;
     ttak_logger_init(&engine->logger, logana_log_sink, TTAK_LOG_INFO);
     atomic_init(&engine->jobs_seq, 0);
     atomic_init(&engine->job_count, 0);
-    if (logana_queue_init(&engine->ingress_queue, 2048) != 0) return -1;
-    if (logana_queue_init(&engine->render_queue, 2048) != 0) return -1;
+    if (logana_queue_init(&engine->ingress_queue, 2048) != 0) goto fail;
+    if (logana_queue_init(&engine->render_queue, 2048) != 0) goto fail_render_queue;
     uint64_t now = logana_now_ms();
     engine->analysis_pool = ttak_thread_pool_create(engine->config.worker_threads, 0, now);
     engine->render_pool = ttak_thread_pool_create(engine->config.async_render_threads, 0, now);
-    if (!engine->analysis_pool || !engine->render_pool) return -1;
-    if (pthread_create(&engine->aggregator_thread, NULL, logana_aggregator_main, engine) != 0) return -1;
-    if (pthread_create(&engine->render_dispatcher_thread, NULL, logana_render_dispatcher_main, engine) != 0) return -1;
+    if (!engine->analysis_pool || !engine->render_pool) goto fail_pools;
+    if (pthread_create(&engine->aggregator_thread, NULL, logana_aggregator_main, engine) != 0) goto fail_threads;
+    if (pthread_create(&engine->render_dispatcher_thread, NULL, logana_render_dispatcher_main, engine) != 0) goto fail_render_thread;
     atomic_init(&engine->next_job_id, 1);
     atomic_init(&engine->auto_cache_count, 0);
     ttak_logger_log(&engine->logger, TTAK_LOG_INFO, "log analytics engine initialized with %zu analysis workers and %zu render workers",
                     engine->config.worker_threads, engine->config.async_render_threads);
     return 0;
+
+fail_render_thread:
+    engine->shutting_down = true;
+    logana_queue_close(&engine->ingress_queue);
+    pthread_join(engine->aggregator_thread, NULL);
+fail_threads:
+    if (engine->analysis_pool) ttak_thread_pool_destroy(engine->analysis_pool);
+    if (engine->render_pool) ttak_thread_pool_destroy(engine->render_pool);
+fail_pools:
+    logana_queue_destroy(&engine->render_queue);
+fail_render_queue:
+    logana_queue_destroy(&engine->ingress_queue);
+fail:
+    return -1;
 }
 
 logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload, size_t payload_size,
                                    logana_algorithm_t algorithm, logana_cluster_options_t options) {
+    if (!engine || !payload) return NULL;
     logana_job_t *job = calloc(1, sizeof(*job));
     if (!job) return NULL;
     job->payload = malloc(payload_size + 1);
@@ -246,17 +268,19 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
 void logana_job_destroy(logana_job_t *job) {
     if (!job) return;
     logana_engine_t *engine = job->engine;
-    seqlock_write_begin(&engine->jobs_seq);
-    size_t count = atomic_load_explicit(&engine->job_count, memory_order_acquire);
-    for (size_t i = 0; i < count; ++i) {
-        if (engine->jobs[i] == job) {
-            memmove(&engine->jobs[i], &engine->jobs[i + 1],
-                    (count - i - 1) * sizeof(logana_job_t *));
-            atomic_fetch_sub_explicit(&engine->job_count, 1, memory_order_release);
-            break;
+    if (engine) {
+        seqlock_write_begin(&engine->jobs_seq);
+        size_t count = atomic_load_explicit(&engine->job_count, memory_order_acquire);
+        for (size_t i = 0; i < count; ++i) {
+            if (engine->jobs[i] == job) {
+                memmove(&engine->jobs[i], &engine->jobs[i + 1],
+                        (count - i - 1) * sizeof(logana_job_t *));
+                atomic_fetch_sub_explicit(&engine->job_count, 1, memory_order_release);
+                break;
+            }
         }
+        seqlock_write_end(&engine->jobs_seq);
     }
-    seqlock_write_end(&engine->jobs_seq);
     free(job->payload);
     free(job->matrix.values);
     free(job->matrix.timestamps);
@@ -275,6 +299,7 @@ void logana_job_destroy(logana_job_t *job) {
 }
 
 void logana_engine_shutdown(logana_engine_t *engine) {
+    if (!engine) return;
     engine->shutting_down = true;
     logana_queue_close(&engine->ingress_queue);
     logana_queue_close(&engine->render_queue);

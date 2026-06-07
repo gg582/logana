@@ -154,7 +154,7 @@ static bool auto_result_shape_allowed(const auto_selection_config_t *config,
 }
 
 static void auto_candidate_reset(auto_candidate_t *c) {
-    if (!c->valid) return;
+    if (!c || !c->valid) return;
     free(c->result.labels);
     free(c->result.is_noise);
     memset(&c->result, 0, sizeof(c->result));
@@ -207,8 +207,7 @@ static int auto_fit(const logana_cluster_strategy_vtable_t *self,
                     const logana_feature_matrix_t *matrix,
                     const logana_analysis_summary_t *summary,
                     logana_cluster_result_t *out) {
-    (void)self;
-    if (!matrix || !matrix->values || !out || matrix->row_count == 0 || matrix->dimensions == 0) return -1;
+    if (!self || !matrix || !matrix->values || !out || matrix->row_count == 0 || matrix->dimensions == 0) return -1;
 
     const auto_selection_config_t config = AUTO_SELECTION_DEFAULTS;
     const auto_dataset_profile_t profile = auto_profile_dataset(matrix, summary);

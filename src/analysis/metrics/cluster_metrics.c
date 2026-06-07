@@ -1,12 +1,15 @@
 #include "logana/math.h"
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+#include <float.h>
 
 static double logana_intra_cluster_distance(const logana_feature_matrix_t *matrix,
                                             logana_distance_fn_t dist_fn,
                                             const logana_analysis_summary_t *summary,
                                             size_t cluster_id,
                                             const int *labels) {
+    if (!matrix || !matrix->values || !labels || !dist_fn) return 0.0;
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
     double total = 0.0;
@@ -17,9 +20,10 @@ static double logana_intra_cluster_distance(const logana_feature_matrix_t *matri
             if (labels[j] != (int)cluster_id) continue;
             double d = dist_fn(matrix->values + i * dims,
                                matrix->values + j * dims,
-                               matrix->valid_mask + i * dims,
-                               matrix->valid_mask + j * dims,
+                               matrix->valid_mask ? matrix->valid_mask + i * dims : NULL,
+                               matrix->valid_mask ? matrix->valid_mask + j * dims : NULL,
                                dims, summary);
+            if (!isfinite(d)) continue;
             total += sqrt(d);
             pairs++;
         }
@@ -32,10 +36,12 @@ static double logana_cluster_centroid_distance(const logana_feature_matrix_t *ma
                                                const logana_analysis_summary_t *summary,
                                                size_t c1, size_t c2,
                                                const int *labels) {
+    if (!matrix || !matrix->values || !labels || !dist_fn) return 0.0;
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
-    double a[LOGANA_MAX_DIMENSIONS] = {0};
-    double b[LOGANA_MAX_DIMENSIONS] = {0};
+    double *a = calloc(dims, sizeof(double));
+    double *b = calloc(dims, sizeof(double));
+    if (!a || !b) { free(a); free(b); return 0.0; }
     size_t na = 0, nb = 0;
 
     for (size_t i = 0; i < rows; ++i) {
@@ -47,12 +53,18 @@ static double logana_cluster_centroid_distance(const logana_feature_matrix_t *ma
             nb++;
         }
     }
-    if (na == 0 || nb == 0) return 0.0;
-    for (size_t d = 0; d < dims; ++d) {
-        a[d] /= (double)na;
-        b[d] /= (double)nb;
+    double result = 0.0;
+    if (na > 0 && nb > 0) {
+        for (size_t d = 0; d < dims; ++d) {
+            a[d] /= (double)na;
+            b[d] /= (double)nb;
+        }
+        double d = dist_fn(a, b, NULL, NULL, dims, summary);
+        if (isfinite(d) && d >= 0.0) result = sqrt(d);
     }
-    return sqrt(dist_fn(a, b, NULL, NULL, dims, summary));
+    free(a);
+    free(b);
+    return result;
 }
 
 /**
@@ -64,6 +76,7 @@ double logana_silhouette_score(const logana_feature_matrix_t *matrix,
                                const logana_analysis_summary_t *summary,
                                const int *labels,
                                size_t cluster_count) {
+    if (!matrix || !matrix->values || !labels || !dist_fn) return -1.0;
     size_t rows = matrix->row_count;
     if (rows > 65536) rows = 65536;
     size_t dims = matrix->dimensions;
@@ -85,9 +98,10 @@ double logana_silhouette_score(const logana_feature_matrix_t *matrix,
                 if (labels[j] != (int)c) continue;
                 double d = dist_fn(matrix->values + i * dims,
                                    matrix->values + j * dims,
-                                   matrix->valid_mask + i * dims,
-                                   matrix->valid_mask + j * dims,
+                                   matrix->valid_mask ? matrix->valid_mask + i * dims : NULL,
+                                   matrix->valid_mask ? matrix->valid_mask + j * dims : NULL,
                                    dims, summary);
+                if (!isfinite(d)) continue;
                 inter += sqrt(d);
                 inter_cnt++;
             }
@@ -100,9 +114,10 @@ double logana_silhouette_score(const logana_feature_matrix_t *matrix,
             if (i == j || labels[j] != labels[i]) continue;
             double d = dist_fn(matrix->values + i * dims,
                                matrix->values + j * dims,
-                               matrix->valid_mask + i * dims,
-                               matrix->valid_mask + j * dims,
+                               matrix->valid_mask ? matrix->valid_mask + i * dims : NULL,
+                               matrix->valid_mask ? matrix->valid_mask + j * dims : NULL,
                                dims, summary);
+            if (!isfinite(d)) continue;
             a += sqrt(d);
             a_cnt++;
         }
@@ -126,9 +141,9 @@ double logana_davies_bouldin_index(const logana_feature_matrix_t *matrix,
                                    const logana_analysis_summary_t *summary,
                                    const int *labels,
                                    size_t cluster_count) {
+    if (!matrix || !matrix->values || !labels || !dist_fn) return INFINITY;
     if (cluster_count <= 1) return INFINITY;
     if (matrix->row_count > 65536) {
-        /* Cap evaluation cost for very large matrices */
         return 1.0;
     }
 
