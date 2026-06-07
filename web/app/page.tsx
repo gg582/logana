@@ -1503,8 +1503,11 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
       {schemas.slice(0, 8).map((s, idx) => {
         const total = s.nullCount + s.numericCount + s.stringCount + s.boolCount + s.arrayCount + s.objectCount;
         const dominantType = Array.from(s.types.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
+        const numericSummary = s.hasError ? "error" : `${s.min?.toFixed(2)} / ${s.max?.toFixed(2)} / ${s.mean?.toFixed(2)}`;
+        const hasLongSample = s.sampleValues.some((v) => typeof v === "string" && v.length >= 16);
+        const isWideStats = (s.numericCount > 0 && numericSummary.length >= 28) || hasLongSample;
         return (
-          <div className={`stats-card stagger-${Math.min(idx + 1, 8)}`} key={s.key}>
+          <div className={`stats-card${isWideStats ? " stats-card-wide" : ""} stagger-${Math.min(idx + 1, 8)}`} key={s.key}>
             <div className="stats-header">
               <code>{s.key}</code>
               <span className="stats-badge">{dominantType}</span>
@@ -1515,7 +1518,7 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
                   <span>min / max / mean</span>
                   <strong>
                     <FitText minFontSize={12}>
-                      {s.hasError ? "error" : `${s.min?.toFixed(2)} / ${s.max?.toFixed(2)} / ${s.mean?.toFixed(2)}`}
+                      {numericSummary}
                     </FitText>
                   </strong>
                 </div>
@@ -1530,6 +1533,30 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
                 <span>null rate</span>
                 <strong><FitText minFontSize={12}>{((s.nullCount / Math.max(total, 1)) * 100).toFixed(1)}%</FitText></strong>
               </div>
+              {s.sampleValues && s.sampleValues.length > 0 && (
+                <div className="stats-metric" style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <span>samples</span>
+                  {hasLongSample ? (
+                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "4px", fontSize: "11px" }}>
+                      <tbody>
+                        {s.sampleValues.map((val, vidx) => (
+                          <tr key={vidx} style={{ borderBottom: "1px solid var(--line)", opacity: 0.85 }}>
+                            <td style={{ padding: "4px 0", fontFamily: "var(--font-fira), monospace", color: "var(--accent-soft)", textAlign: "left", wordBreak: "break-all" }}>
+                              {String(val)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <strong style={{ width: "100%", textAlign: "right" }}>
+                      <FitText minFontSize={12}>
+                        {s.sampleValues.map((v) => String(v)).join(", ")}
+                      </FitText>
+                    </strong>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );
