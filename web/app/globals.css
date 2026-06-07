@@ -22,7 +22,6 @@
 * {
   box-sizing: border-box;
   overflow-wrap: break-word;
-  word-break: break-word;
 }
 
 html,
@@ -300,7 +299,6 @@ body {
   margin: 0;
   font-size: 1.05rem;
   text-wrap: balance;
-  word-break: break-word;
   overflow-wrap: break-word;
 }
 
@@ -482,7 +480,6 @@ body {
   font-size: 24px;
   line-height: 1.35;
   transition: color var(--transition-fast) var(--ease-out-expo);
-  word-break: break-word;
   overflow-wrap: break-word;
 }
 
@@ -581,7 +578,6 @@ body {
   display: block;
   margin-top: 8px;
   font-size: 22px;
-  word-break: break-word;
   overflow-wrap: break-word;
 }
 
@@ -653,7 +649,6 @@ body {
   font-size: 22px;
   line-height: 1.35;
   transition: color var(--transition-fast) var(--ease-out-expo);
-  word-break: break-word;
   overflow-wrap: break-word;
 }
 
@@ -814,7 +809,6 @@ body {
 .donut-tooltip-line {
   color: var(--muted);
   overflow-wrap: break-word;
-  word-break: break-word;
 }
 
 .heatmap-cell {
@@ -849,7 +843,6 @@ body {
 .histogram-bar span,
 .histogram-bar strong {
   overflow-wrap: break-word;
-  word-break: break-word;
 }
 
 .histogram-track {
