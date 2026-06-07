@@ -1,6 +1,7 @@
 #ifndef LOGANA_TYPES_H
 #define LOGANA_TYPES_H
 
+#include <stdatomic.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -116,29 +117,35 @@ typedef struct {
 
 typedef struct logana_job {
     uint64_t job_id;
-    pthread_mutex_t lock;
     _Atomic size_t ref_count;
-    logana_job_status_t status;
-    uint64_t created_ms;
-    uint64_t updated_ms;
+    _Atomic logana_job_status_t status;
+    _Atomic uint64_t created_ms;
+    _Atomic uint64_t updated_ms;
     size_t payload_size;
     char *payload;
     logana_algorithm_t algorithm;
     logana_feature_matrix_t matrix;
     logana_analysis_summary_t summary;
     logana_cluster_result_t   result;
-    char *svg;
-    char *html;
+    _Atomic(char *) svg;
+    _Atomic(char *) html;
     char error[256];
     struct logana_engine *engine;
     size_t processed_lines_count;
 } logana_job_t;
 
 typedef struct {
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    ttak_ringbuf_t *ring;
-    bool closed;
+    _Atomic int64_t seq;
+    void *item;
+} logana_lf_slot_t;
+
+typedef struct {
+    logana_lf_slot_t *slots;
+    size_t capacity;
+    size_t mask;
+    _Atomic size_t head;
+    _Atomic size_t tail;
+    _Atomic bool closed;
 } logana_queue_t;
 
 typedef struct {
@@ -166,13 +173,12 @@ typedef struct logana_engine {
     pthread_t aggregator_thread;
     pthread_t render_dispatcher_thread;
     bool shutting_down;
-    pthread_mutex_t jobs_lock;
-    pthread_mutex_t analysis_mutex;
+    _Atomic uint32_t jobs_seq;
+    _Atomic size_t job_count;
     logana_job_t *jobs[LOGANA_MAX_JOBS];
-    size_t job_count;
-    uint64_t next_job_id;
+    _Atomic uint64_t next_job_id;
     logana_auto_cache_entry_t auto_cache[LOGANA_MAX_AUTO_CACHE];
-    size_t auto_cache_count;
+    _Atomic size_t auto_cache_count;
 } logana_engine_t;
 
 typedef struct {

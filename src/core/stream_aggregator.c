@@ -8,76 +8,91 @@
 
 #include <ttak/async/task.h>
 
-static void logana_timespec_after_ms(struct timespec *ts, uint32_t wait_ms) {
-    clock_gettime(CLOCK_REALTIME, ts);
-    ts->tv_sec += wait_ms / 1000U;
-    ts->tv_nsec += (long)(wait_ms % 1000U) * 1000000L;
-    if (ts->tv_nsec >= 1000000000L) {
-        ts->tv_sec += 1;
-        ts->tv_nsec -= 1000000000L;
+int logana_queue_init(logana_queue_t *q, size_t capacity) {
+    memset(q, 0, sizeof(*q));
+    if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
+        size_t cap = 1;
+        while (cap < capacity) cap <<= 1;
+        capacity = cap;
     }
-}
-
-int logana_queue_init(logana_queue_t *queue, size_t capacity) {
-    memset(queue, 0, sizeof(*queue));
-    queue->ring = ttak_ringbuf_create(capacity, sizeof(void *));
-    if (!queue->ring) return -1;
-    pthread_mutex_init(&queue->mutex, NULL);
-    pthread_cond_init(&queue->cond, NULL);
+    q->slots = calloc(capacity, sizeof(logana_lf_slot_t));
+    if (!q->slots) return -1;
+    for (size_t i = 0; i < capacity; ++i) {
+        atomic_init(&q->slots[i].seq, (int64_t)i);
+    }
+    q->capacity = capacity;
+    q->mask = capacity - 1;
+    atomic_init(&q->head, 0);
+    atomic_init(&q->tail, 0);
+    atomic_init(&q->closed, false);
     return 0;
 }
 
-void logana_queue_close(logana_queue_t *queue) {
-    pthread_mutex_lock(&queue->mutex);
-    queue->closed = true;
-    pthread_cond_broadcast(&queue->cond);
-    pthread_mutex_unlock(&queue->mutex);
+void logana_queue_close(logana_queue_t *q) {
+    atomic_store_explicit(&q->closed, true, memory_order_release);
 }
 
-void logana_queue_destroy(logana_queue_t *queue) {
-    if (queue->ring) ttak_ringbuf_destroy(queue->ring);
-    pthread_mutex_destroy(&queue->mutex);
-    pthread_cond_destroy(&queue->cond);
+void logana_queue_destroy(logana_queue_t *q) {
+    free(q->slots);
+    memset(q, 0, sizeof(*q));
 }
 
-bool logana_queue_push(logana_queue_t *queue, void *item, uint32_t wait_ms) {
-    struct timespec deadline;
-    logana_timespec_after_ms(&deadline, wait_ms);
-    pthread_mutex_lock(&queue->mutex);
-    while (!queue->closed && ttak_ringbuf_is_full(queue->ring)) {
-        if (pthread_cond_timedwait(&queue->cond, &queue->mutex, &deadline) == ETIMEDOUT) {
-            pthread_mutex_unlock(&queue->mutex);
+bool logana_queue_push(logana_queue_t *q, void *item, uint32_t wait_ms) {
+    uint64_t deadline = logana_now_ms() + wait_ms;
+    while (true) {
+        if (atomic_load_explicit(&q->closed, memory_order_acquire))
             return false;
+
+        size_t h = atomic_load_explicit(&q->head, memory_order_relaxed);
+        logana_lf_slot_t *slot = &q->slots[h & q->mask];
+        int64_t seq = atomic_load_explicit(&slot->seq, memory_order_acquire);
+        int64_t diff = seq - (int64_t)h;
+
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &q->head, &h, h + 1,
+                    memory_order_relaxed, memory_order_relaxed)) {
+                slot->item = item;
+                atomic_store_explicit(&slot->seq, h + 1, memory_order_release);
+                return true;
+            }
+        } else if (diff < 0) {
+            if (logana_now_ms() >= deadline)
+                return false;
+            struct timespec ts = {0, 1000000};
+            nanosleep(&ts, NULL);
         }
+        /* diff > 0 : another thread is ahead, retry */
     }
-    if (queue->closed) {
-        pthread_mutex_unlock(&queue->mutex);
-        return false;
-    }
-    bool ok = ttak_ringbuf_push(queue->ring, &item);
-    pthread_cond_broadcast(&queue->cond);
-    pthread_mutex_unlock(&queue->mutex);
-    return ok;
 }
 
-bool logana_queue_pop(logana_queue_t *queue, void **item, uint32_t wait_ms) {
-    struct timespec deadline;
-    logana_timespec_after_ms(&deadline, wait_ms);
-    pthread_mutex_lock(&queue->mutex);
-    while (!queue->closed && ttak_ringbuf_is_empty(queue->ring)) {
-        if (pthread_cond_timedwait(&queue->cond, &queue->mutex, &deadline) == ETIMEDOUT) {
-            pthread_mutex_unlock(&queue->mutex);
-            return false;
+bool logana_queue_pop(logana_queue_t *q, void **out, uint32_t wait_ms) {
+    uint64_t deadline = logana_now_ms() + wait_ms;
+    while (true) {
+        size_t t = atomic_load_explicit(&q->tail, memory_order_relaxed);
+        logana_lf_slot_t *slot = &q->slots[t & q->mask];
+        int64_t seq = atomic_load_explicit(&slot->seq, memory_order_acquire);
+        int64_t diff = seq - (int64_t)(t + 1);
+
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &q->tail, &t, t + 1,
+                    memory_order_relaxed, memory_order_relaxed)) {
+                void *item = slot->item;
+                atomic_store_explicit(&slot->seq, t + q->mask + 1, memory_order_release);
+                *out = item;
+                return true;
+            }
+        } else if (diff < 0) {
+            if (atomic_load_explicit(&q->closed, memory_order_acquire))
+                return false;
+            if (logana_now_ms() >= deadline)
+                return false;
+            struct timespec ts = {0, 1000000};
+            nanosleep(&ts, NULL);
         }
+        /* diff > 0 : retry */
     }
-    if (ttak_ringbuf_is_empty(queue->ring)) {
-        pthread_mutex_unlock(&queue->mutex);
-        return false;
-    }
-    bool ok = ttak_ringbuf_pop(queue->ring, item);
-    pthread_cond_broadcast(&queue->cond);
-    pthread_mutex_unlock(&queue->mutex);
-    return ok;
 }
 
 static int logana_schedule_batch(logana_engine_t *engine, logana_batch_t *batch) {
@@ -100,10 +115,8 @@ void *logana_analyze_batch_task(void *arg) {
         logana_job_t *job = batch->jobs[i];
         if (logana_analyze_job(batch->engine, job) == 0) {
             if (!logana_queue_push(&batch->engine->render_queue, job, 100)) {
-                pthread_mutex_lock(&job->lock);
-                job->status = LOGANA_JOB_FAILED;
+                atomic_store_explicit(&job->status, LOGANA_JOB_FAILED, memory_order_release);
                 snprintf(job->error, sizeof(job->error), "%s", "render queue is saturated");
-                pthread_mutex_unlock(&job->lock);
                 logana_job_unref(job);
             }
         } else {
@@ -135,9 +148,7 @@ void *logana_aggregator_main(void *arg) {
         uint64_t started = logana_now_ms();
         batch->jobs[batch->job_count++] = first;
         batch->total_bytes += first->payload_size;
-        pthread_mutex_lock(&first->lock);
-        first->status = LOGANA_JOB_BATCHING;
-        pthread_mutex_unlock(&first->lock);
+        atomic_store_explicit(&first->status, LOGANA_JOB_BATCHING, memory_order_release);
 
         while (batch->job_count < LOGANA_MAX_BATCH_JOBS &&
                batch->total_bytes < engine->config.min_batch_size_bytes &&
@@ -148,17 +159,13 @@ void *logana_aggregator_main(void *arg) {
             }
             batch->jobs[batch->job_count++] = next;
             batch->total_bytes += next->payload_size;
-            pthread_mutex_lock(&next->lock);
-            next->status = LOGANA_JOB_BATCHING;
-            pthread_mutex_unlock(&next->lock);
+            atomic_store_explicit(&next->status, LOGANA_JOB_BATCHING, memory_order_release);
         }
 
         if (logana_schedule_batch(engine, batch) != 0) {
             for (size_t i = 0; i < batch->job_count; ++i) {
-                pthread_mutex_lock(&batch->jobs[i]->lock);
-                batch->jobs[i]->status = LOGANA_JOB_FAILED;
+                atomic_store_explicit(&batch->jobs[i]->status, LOGANA_JOB_FAILED, memory_order_release);
                 snprintf(batch->jobs[i]->error, sizeof(batch->jobs[i]->error), "%s", "failed to schedule analysis task");
-                pthread_mutex_unlock(&batch->jobs[i]->lock);
                 logana_job_unref(batch->jobs[i]);
             }
             free(batch->jobs);

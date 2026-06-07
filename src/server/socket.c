@@ -140,9 +140,8 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
     char job_id[32];
     snprintf(job_id, sizeof(job_id), "%llu", (unsigned long long)job->job_id);
     cJSON_AddStringToObject(json, "jobId", job_id);
-    pthread_mutex_lock(&job->lock);
-    cJSON_AddStringToObject(json, "status", logana_status_name(job->status));
-    pthread_mutex_unlock(&job->lock);
+    logana_job_status_t st = atomic_load_explicit(&job->status, memory_order_acquire);
+    cJSON_AddStringToObject(json, "status", logana_status_name(st));
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
     logana_send_json(res, CWIST_HTTP_OK, rendered);

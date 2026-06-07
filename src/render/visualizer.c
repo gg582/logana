@@ -46,10 +46,9 @@ typedef struct {
 } logana_job_snapshot_t;
 
 static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapshot) {
-    pthread_mutex_lock(&job->lock);
     snapshot->job_id = job->job_id;
-    snapshot->status = job->status;
-    snapshot->updated_ms = job->updated_ms;
+    snapshot->status = atomic_load_explicit(&job->status, memory_order_acquire);
+    snapshot->updated_ms = atomic_load_explicit(&job->updated_ms, memory_order_acquire);
     snapshot->algorithm = (job->result.algorithm != LOGANA_ALGO_AUTO) ? job->result.algorithm : job->algorithm;
     snapshot->row_count = job->summary.row_count;
     snapshot->dimensions = job->summary.dimensions;
@@ -59,11 +58,11 @@ static void logana_job_snapshot(logana_job_t *job, logana_job_snapshot_t *snapsh
     snapshot->outlier_ratio = job->summary.outlier_ratio;
     snapshot->cluster_balance = job->summary.cluster_balance;
     snapshot->schema_drift = job->summary.schema_drift;
-    /* strdup under lock so the pointers remain valid after unlock */
-    snapshot->svg  = job->svg  ? strdup(job->svg)  : NULL;
-    snapshot->html = job->html ? strdup(job->html) : NULL;
-    snapshot->error = job->error; /* static array — valid for life of job */
-    pthread_mutex_unlock(&job->lock);
+    char *svg = atomic_load_explicit(&job->svg, memory_order_acquire);
+    char *html = atomic_load_explicit(&job->html, memory_order_acquire);
+    snapshot->svg  = svg  ? strdup(svg)  : NULL;
+    snapshot->html = html ? strdup(html) : NULL;
+    snapshot->error = job->error;
 }
 
 static void logana_job_snapshot_free(logana_job_snapshot_t *snapshot) {
@@ -433,40 +432,30 @@ static char *logana_render_job_fragment(logana_job_t *job) {
 }
 
 int logana_render_job(logana_engine_t *engine, logana_job_t *job) {
-    pthread_mutex_lock(&job->lock);
-    job->status = LOGANA_JOB_RENDERING;
-    pthread_mutex_unlock(&job->lock);
+    atomic_store_explicit(&job->status, LOGANA_JOB_RENDERING, memory_order_release);
 
     char *svg = logana_build_svg(engine, job);
     if (!svg) {
-        pthread_mutex_lock(&job->lock);
-        job->status = LOGANA_JOB_FAILED;
+        atomic_store_explicit(&job->status, LOGANA_JOB_FAILED, memory_order_release);
         snprintf(job->error, sizeof(job->error), "%s", "failed to build svg");
-        pthread_mutex_unlock(&job->lock);
         return -1;
     }
 
-    pthread_mutex_lock(&job->lock);
-    free(job->svg);
-    job->svg = svg;
-    job->updated_ms = logana_now_ms();
-    pthread_mutex_unlock(&job->lock);
+    char *old_svg = atomic_exchange_explicit(&job->svg, svg, memory_order_acq_rel);
+    free(old_svg);
+    atomic_store_explicit(&job->updated_ms, logana_now_ms(), memory_order_relaxed);
 
     char *html = logana_render_job_fragment(job);
     if (!html) {
-        pthread_mutex_lock(&job->lock);
-        job->status = LOGANA_JOB_FAILED;
+        atomic_store_explicit(&job->status, LOGANA_JOB_FAILED, memory_order_release);
         snprintf(job->error, sizeof(job->error), "%s", "failed to build report html");
-        pthread_mutex_unlock(&job->lock);
         return -1;
     }
 
-    pthread_mutex_lock(&job->lock);
-    free(job->html);
-    job->html = html;
-    job->status = LOGANA_JOB_READY;
-    job->updated_ms = logana_now_ms();
-    pthread_mutex_unlock(&job->lock);
+    char *old_html = atomic_exchange_explicit(&job->html, html, memory_order_acq_rel);
+    free(old_html);
+    atomic_store_explicit(&job->status, LOGANA_JOB_READY, memory_order_release);
+    atomic_store_explicit(&job->updated_ms, logana_now_ms(), memory_order_relaxed);
     return 0;
 }
 
@@ -547,9 +536,7 @@ char *logana_job_result_json(logana_job_t *job) {
     cJSON_AddStringToObject(json, "status", logana_status_name(snapshot.status));
     cJSON_AddStringToObject(json, "algorithm", logana_algorithm_name(snapshot.algorithm));
     cJSON_AddNumberToObject(json, "rows", (double)snapshot.row_count);
-    pthread_mutex_lock(&job->lock);
     cJSON_AddNumberToObject(json, "clusters", (double)job->result.cluster_count);
-    pthread_mutex_unlock(&job->lock);
     cJSON_AddNumberToObject(json, "entropy", snapshot.entropy);
     cJSON_AddNumberToObject(json, "trendSlope", snapshot.slope);
     cJSON_AddNumberToObject(json, "outlierRatio", snapshot.outlier_ratio);
