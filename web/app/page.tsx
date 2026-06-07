@@ -1638,7 +1638,7 @@ export default function Home() {
         await new Promise((r) => setTimeout(r, 1000));
         return fetchIngest(payload, algorithm, attempt + 1);
       }
-      return { error: "Server is busy. Please press again later" };
+      return { error: "submit failed" };
     }
   }
 
@@ -1659,7 +1659,7 @@ export default function Home() {
       const validJobs = ingestResults.filter((j): j is typeof j & { jobId: string } => !!j.jobId);
       if (validJobs.length === 0) {
         const firstError = ingestResults.find((j) => j.error)?.error;
-        setStatus(firstError ?? "Server is busy. Please press again later");
+        setStatus(firstError ?? "submit failed");
         return;
       }
 
@@ -1701,7 +1701,7 @@ export default function Home() {
 
     const ingest = await fetchIngest(activePayload, algorithm);
     if (!ingest.jobId) {
-      setStatus(ingest.error ?? "Server is busy. Please press again later");
+      setStatus(ingest.error ?? "submit failed");
       return;
     }
     setStatus(`job ${ingest.jobId} queued`);

@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sched.h>
 
 static void logana_log_sink(ttak_log_level_t level, const char *msg) {
     const char *tag = "INFO";
@@ -40,7 +39,7 @@ void logana_job_unref(logana_job_t *job) {
 /* -------------------------------------------------------------------------- */
 
 static uint64_t logana_compute_fingerprint(const logana_job_t *job, size_t rows, size_t active_dims) {
-    size_t sample = job->payload_size > 4096 ? 4096 : job->payload_size;
+    size_t sample = job->payload_size > 1024 ? 1024 : job->payload_size;
     uint64_t h = logana_hash64(job->payload, sample);
     h ^= (uint64_t)rows * 0x9e3779b97f4a7c15ULL;
     h ^= (uint64_t)active_dims * 0xbf58476d1ce4e5b9ULL;
@@ -71,6 +70,7 @@ static void logana_auto_cache_insert(logana_engine_t *engine, uint64_t fp,
 /* -------------------------------------------------------------------------- */
 
 int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
+    pthread_mutex_lock(&engine->analysis_mutex);
     logana_set_job_status(job, LOGANA_JOB_ANALYZING, NULL);
 
     logana_pipeline_context_t ctx = {0};
@@ -89,6 +89,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
     int rc = logana_pipeline_execute(stages, 5, &ctx);
     if (rc != 0) {
         logana_set_job_status(job, LOGANA_JOB_FAILED, "pipeline execution failed");
+        pthread_mutex_unlock(&engine->analysis_mutex);
         return -1;
     }
 
@@ -98,6 +99,7 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
         logana_auto_cache_insert(engine, fp, job->result.algorithm, logana_now_ms());
     }
 
+    pthread_mutex_unlock(&engine->analysis_mutex);
     return 0;
 }
 
@@ -107,9 +109,8 @@ int logana_analyze_job(logana_engine_t *engine, logana_job_t *job) {
 
 static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
     pthread_mutex_lock(&engine->jobs_lock);
-    /* Aggressively evict up to 3 completed jobs to make room */
-    int evict_attempts = 3;
-    while (engine->job_count >= LOGANA_MAX_JOBS && evict_attempts-- > 0) {
+    logana_job_t *to_remove = NULL;
+    if (engine->job_count >= LOGANA_MAX_JOBS) {
         for (size_t i = 0; i < engine->job_count; ++i) {
             logana_job_t *j = engine->jobs[i];
             if (!j) continue;
@@ -119,10 +120,10 @@ static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
             if (done) {
                 size_t refs = __atomic_load_n(&j->ref_count, __ATOMIC_ACQUIRE);
                 if (refs == 1) {
+                    to_remove = j;
                     memmove(&engine->jobs[i], &engine->jobs[i + 1],
                             (engine->job_count - i - 1) * sizeof(logana_job_t *));
                     engine->job_count--;
-                    logana_job_unref(j);
                     break;
                 }
             }
@@ -131,9 +132,15 @@ static bool logana_register_job(logana_engine_t *engine, logana_job_t *job) {
     if (engine->job_count < LOGANA_MAX_JOBS) {
         engine->jobs[engine->job_count++] = job;
         pthread_mutex_unlock(&engine->jobs_lock);
+        if (to_remove) {
+            logana_job_unref(to_remove);
+        }
         return true;
     }
     pthread_mutex_unlock(&engine->jobs_lock);
+    if (to_remove) {
+        logana_job_unref(to_remove);
+    }
     return false;
 }
 
@@ -156,8 +163,9 @@ int logana_engine_init(logana_engine_t *engine, const logana_config_t *config) {
     engine->config = *config;
     ttak_logger_init(&engine->logger, logana_log_sink, TTAK_LOG_INFO);
     pthread_mutex_init(&engine->jobs_lock, NULL);
-    if (logana_queue_init(&engine->ingress_queue, 65536) != 0) return -1;
-    if (logana_queue_init(&engine->render_queue, 65536) != 0) return -1;
+    pthread_mutex_init(&engine->analysis_mutex, NULL);
+    if (logana_queue_init(&engine->ingress_queue, 2048) != 0) return -1;
+    if (logana_queue_init(&engine->render_queue, 2048) != 0) return -1;
     uint64_t now = logana_now_ms();
     engine->analysis_pool = ttak_thread_pool_create(engine->config.worker_threads, 0, now);
     engine->render_pool = ttak_thread_pool_create(engine->config.async_render_threads, 0, now);
@@ -174,40 +182,15 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
     logana_job_t *job = calloc(1, sizeof(*job));
     if (!job) return NULL;
     pthread_mutex_init(&job->lock, NULL);
-
-    /* --- Truncation Gatekeeper --- */
-    size_t actual_size = payload_size;
-    bool truncated = false;
-    if (actual_size > LOGANA_MAX_PAYLOAD_BYTES) {
-        actual_size = LOGANA_MAX_PAYLOAD_BYTES;
-        truncated = true;
-    }
-
-    /* Enforce 30,000 line ceiling */
-    size_t line_count = 0;
-    size_t cutoff = actual_size;
-    for (size_t i = 0; i < actual_size; ++i) {
-        if (payload[i] == '\n') {
-            line_count++;
-            if (line_count >= LOGANA_MAX_PAYLOAD_LINES) {
-                cutoff = i + 1; /* include the newline */
-                truncated = true;
-                break;
-            }
-        }
-    }
-    actual_size = cutoff;
-
-    job->payload = malloc(actual_size + 1);
+    job->payload = malloc(payload_size + 1);
     if (!job->payload) {
         free(job);
         return NULL;
     }
-    memcpy(job->payload, payload, actual_size);
-    job->payload[actual_size] = '\0';
-    job->payload_size = actual_size;
-    job->payload_truncated = truncated;
+    memcpy(job->payload, payload, payload_size);
+    job->payload[payload_size] = '\0';
     job->job_id = __atomic_fetch_add(&engine->next_job_id, 1, __ATOMIC_RELAXED);
+    job->payload_size = payload_size;
     job->algorithm = algorithm;
     job->created_ms = logana_now_ms();
     job->updated_ms = job->created_ms;
@@ -218,13 +201,11 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
         logana_job_unref(job);
         return NULL;
     }
-    /* Block up to 60 seconds for queue space (paid-service guarantee) */
     if (!logana_queue_push(&engine->ingress_queue, job, 100)) {
-        logana_set_job_status(job, LOGANA_JOB_FAILED, "ingress queue is saturated after 60s");
+        logana_set_job_status(job, LOGANA_JOB_FAILED, "ingress queue is saturated");
         logana_job_unref(job);
         return NULL;
     }
-    job->queue_position = logana_queue_count(&engine->ingress_queue);
     return job;
 }
 
@@ -271,4 +252,5 @@ void logana_engine_shutdown(logana_engine_t *engine) {
     logana_queue_destroy(&engine->ingress_queue);
     logana_queue_destroy(&engine->render_queue);
     pthread_mutex_destroy(&engine->jobs_lock);
+    pthread_mutex_destroy(&engine->analysis_mutex);
 }
