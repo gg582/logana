@@ -506,9 +506,6 @@ body {
   font-size: 13px;
   max-width: 100%;
   transition: all var(--transition-fast) var(--ease-out-expo);
-  overflow-wrap: break-word;
-  word-break: break-word;
-  white-space: normal;
 }
 
 .status-pill {
@@ -843,7 +840,7 @@ body {
 
 .histogram-bar {
   display: grid;
-  grid-template-columns: minmax(0, 120px) 1fr 48px;
+  grid-template-columns: 120px 1fr 48px;
   gap: 12px;
   align-items: center;
   font: 500 13px/1.8 var(--font-fira), "IBM Plex Mono", monospace;
@@ -853,7 +850,6 @@ body {
 .histogram-bar strong {
   overflow-wrap: break-word;
   word-break: break-word;
-  min-width: 0;
 }
 
 .histogram-track {
@@ -879,17 +875,10 @@ body {
 
 .boolean-row {
   display: grid;
-  grid-template-columns: minmax(0, 64px) 1fr 48px;
+  grid-template-columns: 64px 1fr 48px;
   gap: 12px;
   align-items: center;
   font: 500 13px/1.8 var(--font-fira), "IBM Plex Mono", monospace;
-}
-
-.boolean-row span,
-.boolean-row strong {
-  overflow-wrap: break-word;
-  word-break: break-word;
-  min-width: 0;
 }
 
 .boolean-track {
@@ -958,7 +947,7 @@ body {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.6;
-  word-break: break-word;
+  word-break: normal;
   overflow-wrap: break-word;
 }
 
@@ -990,8 +979,6 @@ body {
   background: rgba(255, 255, 255, 0.03);
   padding: 14px;
   min-width: 0;
-  overflow-wrap: break-word;
-  word-break: break-word;
   transition:
     transform var(--transition-base) var(--ease-out-expo),
     background var(--transition-base) var(--ease-out-expo),
@@ -1014,7 +1001,6 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
-  min-width: 0;
 }
 
 .stats-header code {
@@ -1024,9 +1010,6 @@ body {
   padding: 4px 8px;
   border-radius: 8px;
   word-break: break-all;
-  display: inline-block;
-  max-width: 100%;
-  min-width: 0;
   transition: background var(--transition-fast) var(--ease-out-expo);
 }
 
@@ -1062,16 +1045,12 @@ body {
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
-  min-width: 0;
 }
 
 .stats-metric span {
   font-size: 12px;
   color: var(--muted);
   transition: color var(--transition-fast) var(--ease-out-expo);
-  overflow-wrap: break-word;
-  word-break: break-word;
-  min-width: 0;
 }
 
 .stats-card:hover .stats-metric span {
@@ -1082,9 +1061,6 @@ body {
   font-size: 16px;
   color: var(--fg);
   transition: color var(--transition-fast) var(--ease-out-expo);
-  overflow-wrap: break-word;
-  word-break: break-word;
-  min-width: 0;
 }
 
 .stats-card:hover .stats-metric strong {

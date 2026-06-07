@@ -219,7 +219,7 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
         return NULL;
     }
     /* Block up to 60 seconds for queue space (paid-service guarantee) */
-    if (!logana_queue_push(&engine->ingress_queue, job, 60000)) {
+    if (!logana_queue_push(&engine->ingress_queue, job, 100)) {
         logana_set_job_status(job, LOGANA_JOB_FAILED, "ingress queue is saturated after 60s");
         logana_job_unref(job);
         return NULL;

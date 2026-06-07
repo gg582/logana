@@ -16,7 +16,7 @@ import type { ParsedLogRow, FieldSchema } from "./log-parser";
 /* -------------------------------------------------------------------------- */
 /* Configuration                                                              */
 /* -------------------------------------------------------------------------- */
-const MAX_DYNAMIC_FIELDS = 128;
+const MAX_DYNAMIC_FIELDS = 32;
 const SCALE_EXPLOSION_THRESHOLD = 1e15;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER; /* 9007199254740991 */
 const COUNTER_MAX = 1e9;

@@ -9,10 +9,10 @@ export async function POST(request: NextRequest) {
     if (!payload.trim()) {
       return NextResponse.json({ error: "payload is required" }, { status: 400 });
     }
-    const res = await ingestLogs(payload, algorithm);
-    return NextResponse.json(res);
+    const data = await ingestLogs(payload, algorithm);
+    return NextResponse.json(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "ingest failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

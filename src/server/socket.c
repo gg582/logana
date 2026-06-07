@@ -142,12 +142,10 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
     cJSON_AddStringToObject(json, "jobId", job_id);
     pthread_mutex_lock(&job->lock);
     cJSON_AddStringToObject(json, "status", logana_status_name(job->status));
-    cJSON_AddBoolToObject(json, "payloadTruncated", job->payload_truncated);
-    cJSON_AddNumberToObject(json, "queuePosition", (double)job->queue_position);
     pthread_mutex_unlock(&job->lock);
     char *rendered = logana_cjson_to_string(json);
     cJSON_Delete(json);
-    logana_send_json(res, (cwist_http_status_t)202, rendered);
+    logana_send_json(res, CWIST_HTTP_OK, rendered);
 }
 
 static const char *logana_extract_job_id_from_path(const char *path, const char *suffix, char *buffer, size_t buffer_size) {
