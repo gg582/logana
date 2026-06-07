@@ -40,7 +40,7 @@ void logana_job_unref(logana_job_t *job) {
 /* -------------------------------------------------------------------------- */
 
 static uint64_t logana_compute_fingerprint(const logana_job_t *job, size_t rows, size_t active_dims) {
-    size_t sample = job->payload_size > 1024 ? 1024 : job->payload_size;
+    size_t sample = job->payload_size > 4096 ? 4096 : job->payload_size;
     uint64_t h = logana_hash64(job->payload, sample);
     h ^= (uint64_t)rows * 0x9e3779b97f4a7c15ULL;
     h ^= (uint64_t)active_dims * 0xbf58476d1ce4e5b9ULL;

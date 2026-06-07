@@ -9,8 +9,8 @@ static size_t run_agglomerative(const logana_feature_matrix_t *matrix, size_t ta
                                 int *labels) {
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
-    if (rows > 1024) rows = 1024;
-    int active[1024];
+    if (rows > 4096) rows = 4096;
+    int active[4096];
     for (size_t i = 0; i < rows; ++i) active[i] = (int)i;
     size_t clusters = rows;
     while (clusters > target_clusters && clusters > 1) {

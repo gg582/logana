@@ -19,4 +19,4 @@ services:
       resources:
         limits:
           cpus: "4.0"
-          memory: 2GB
+          memory: 12GB

@@ -15,7 +15,7 @@ static size_t run_optics(const logana_feature_matrix_t *matrix, double eps, size
                          int *labels) {
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
-    if (rows > 4096) rows = 4096;
+    if (rows > 65536) rows = 65536;
     neighbor_t *neighbors = malloc(rows * sizeof(neighbor_t));
     if (!neighbors) return 0;
     for (size_t i = 0; i < rows; ++i) {
@@ -54,7 +54,7 @@ static int optics_fit(const logana_cluster_strategy_vtable_t *self,
     (void)self;
     size_t rows = matrix->row_count;
     if (!rows) return -1;
-    if (rows > 8192) rows = 8192;
+    if (rows > 65536) rows = 65536;
     int *labels = calloc(rows, sizeof(int));
     bool *is_noise = calloc(rows, sizeof(bool));
     if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }

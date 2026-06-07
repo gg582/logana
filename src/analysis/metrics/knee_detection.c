@@ -31,7 +31,7 @@ double logana_knee_detect_eps(const logana_feature_matrix_t *matrix,
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
     if (rows == 0 || dims == 0 || k == 0) return 1.0;
-    if (rows > 8192) rows = 8192;
+    if (rows > 65536) rows = 65536;
     if (k >= rows) k = rows - 1;
 
     double *kdists = calloc(rows, sizeof(double));

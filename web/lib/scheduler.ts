@@ -14,10 +14,10 @@ type SchedulerJob = {
   error?: string;
 };
 
-const MAX_CONCURRENT = 1;
-const CPU_THRESHOLD = 0.8;
-const MEM_THRESHOLD = 0.15;
-const DEFAULT_AVG_MS = 10000;
+const MAX_CONCURRENT = 2;
+const CPU_THRESHOLD = 0.95;
+const MEM_THRESHOLD = 0.05;
+const DEFAULT_AVG_MS = 3000;
 const MAX_HISTORY = 10;
 const TICK_MS = 1000;
 

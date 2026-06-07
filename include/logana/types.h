@@ -10,13 +10,13 @@
 #include <ttak/log/logger.h>
 #include <ttak/thread/pool.h>
 
-#define LOGANA_MAX_KEYS 16
-#define LOGANA_MAX_ROWS 2000000
-#define LOGANA_MAX_DIMENSIONS 32
-#define LOGANA_MAX_BATCH_JOBS 512
-#define LOGANA_MAX_JOBS 4096
-#define LOGANA_MAX_PAYLOAD_LINES 30000
-#define LOGANA_MAX_PAYLOAD_BYTES (10 * 1024 * 1024)
+#define LOGANA_MAX_KEYS 64
+#define LOGANA_MAX_ROWS 10000000
+#define LOGANA_MAX_DIMENSIONS 128
+#define LOGANA_MAX_BATCH_JOBS 2048
+#define LOGANA_MAX_JOBS 16384
+#define LOGANA_MAX_PAYLOAD_LINES 200000
+#define LOGANA_MAX_PAYLOAD_BYTES (128 * 1024 * 1024)
 
 typedef enum {
     LOGANA_JOB_QUEUED = 0,
@@ -152,7 +152,7 @@ typedef struct {
     size_t total_bytes;
 } logana_batch_t;
 
-#define LOGANA_MAX_AUTO_CACHE 64
+#define LOGANA_MAX_AUTO_CACHE 512
 
 typedef struct {
     uint64_t fingerprint;          /* payload hash + dimensional signature */

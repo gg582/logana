@@ -87,10 +87,10 @@ static int auto_fit(const logana_cluster_strategy_vtable_t *self,
         logana_strategy_mean_shift(),
     };
 
-    size_t effective_rows = matrix->row_count > 8192 ? 8192 : matrix->row_count;
+    size_t effective_rows = matrix->row_count > 65536 ? 65536 : matrix->row_count;
     for (size_t i = 0; i < sizeof(strategies) / sizeof(strategies[0]); ++i) {
         /* Skip heavy O(n^2) strategies on large matrices before they burn CPU */
-        if (effective_rows > 4096 &&
+        if (effective_rows > 32768 &&
             (strcmp(strategies[i]->name, "dbscan") == 0 ||
              strcmp(strategies[i]->name, "optics") == 0)) {
             fprintf(stderr, "[auto] skipping %s on large matrix (rows=%zu)\n",

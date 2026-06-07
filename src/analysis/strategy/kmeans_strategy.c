@@ -93,7 +93,7 @@ static size_t run_kmeans(const logana_feature_matrix_t *matrix, size_t k, size_t
     int *tmp_labels = calloc(rows, sizeof(int));
     if (!tmp_labels) return 0;
 
-    const size_t n_init = (rows > 1000) ? 3 : 5;
+    const size_t n_init = (rows > 5000) ? 3 : 5;
     double best_inertia = 1e300;
 
     for (size_t trial = 0; trial < n_init; ++trial) {
