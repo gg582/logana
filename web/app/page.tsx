@@ -1626,6 +1626,50 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Configurable file upload limit (TODO: move to env/config)
+  const MAX_FILE_SIZE_MB = 100;
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    const allowedExts = [".json", ".jsonl", ".log", ".txt"];
+    const validFiles = files.filter((f) =>
+      allowedExts.some((ext) => f.name.toLowerCase().endsWith(ext))
+    );
+    if (validFiles.length === 0) {
+      setStatus("Unsupported file type. Use .json, .jsonl, .log, or .txt");
+      return;
+    }
+
+    const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+    const oversized = validFiles.find((f) => f.size > maxBytes);
+    if (oversized) {
+      setStatus(`File too large: ${oversized.name} (> ${MAX_FILE_SIZE_MB}MB)`);
+      return;
+    }
+
+    const readFile = (file: File): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve((event.target?.result as string) ?? "");
+        reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+        reader.readAsText(file);
+      });
+
+    Promise.all(validFiles.map(readFile))
+      .then((texts) => {
+        const combined = texts.join("\n");
+        setPayload(combined);
+        setStatus(`Loaded ${validFiles.length} file(s), ${combined.length} chars — press Run analysis`);
+      })
+      .catch((err) => {
+        setStatus(String(err?.message ?? "File read failed"));
+      });
+  }
+
   async function submit(overridePayload?: string, attempt: number = 1) {
     const MAX_ATTEMPTS = 10;
     const RETRY_DELAY = 5000;
@@ -1636,9 +1680,14 @@ export default function Home() {
 
     async function pollJob(jobId: string, onStatus: (s: Record<string, unknown>) => void): Promise<Result> {
       return new Promise((resolve, reject) => {
+        let consecutiveErrors = 0;
         const tick = setInterval(async () => {
           try {
-            const s = (await fetch(`/api/jobs/${jobId}/status`).then((r) => r.json())) as Record<string, unknown>;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            const s = (await fetch(`/api/jobs/${jobId}/status`, { signal: controller.signal }).then((r) => r.json())) as Record<string, unknown>;
+            clearTimeout(timeout);
+            consecutiveErrors = 0;
             onStatus(s);
             if (s.status === "ready" || s.status === "failed") {
               clearInterval(tick);
@@ -1652,76 +1701,55 @@ export default function Home() {
               resolve(res);
             }
           } catch (e) {
-            /* Ignore transient network errors and keep polling */
+            consecutiveErrors++;
+            if (consecutiveErrors >= 30) {
+              clearInterval(tick);
+              reject(new Error("Server unreachable after repeated polling failures"));
+            }
           }
         }, 2000);
       });
     }
 
     if (algorithm === "auto") {
-      setStatus("auto: submitting all algorithms");
-      const ingestResults = await Promise.all(
-        ALL_ALGORITHMS.map(async (algo) => {
-          const res = await fetch("/api/ingest", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ payload: activePayload, algorithm: algo }),
-          }).then((r) => r.json());
-          return { algo, jobId: res.jobId as string | undefined, error: res.error as string | undefined };
-        })
-      );
-
-      const validJobs = ingestResults.filter((j): j is typeof j & { jobId: string } => !!j.jobId);
-      if (validJobs.length === 0) {
+      setStatus("auto: submitting auto job");
+      const ingest = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ payload: activePayload, algorithm: "auto" }),
+      }).then((r) => r.json());
+      if (!ingest.jobId) {
         if (attempt < MAX_ATTEMPTS) {
           setStatus(`auto submit failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
           setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
         } else {
-          setStatus(ingestResults[0]?.error ?? "auto submit failed");
+          setStatus(ingest.error ?? "auto submit failed");
         }
         return;
       }
 
-      setStatus(`auto: waiting for ${validJobs.length} jobs…`);
-
-      const statuses = new Map<string, string>();
-      const finished = await Promise.all(
-        validJobs.map(({ algo, jobId }) =>
-          pollJob(jobId, (s) => {
-            statuses.set(jobId, String(s.status));
-            const pos = Number(s.position ?? 0);
-            const eta = Number(s.etaMs ?? 0);
-            if (pos > 0 && eta > 0) {
-              setStatus(`auto: ${algo} queued (position ${pos}, ~${Math.ceil(eta / 1000)}s)`);
-            }
-          }).then((result) => ({ algo, result: { ...result, algorithm: algo } as Result })).catch(() => ({
-            algo,
-            result: { jobId, status: "failed", algorithm: algo } as Result,
-          }))
-        )
-      );
-
-      const scored = finished
-        .filter((f) => f.result.status === "ready")
-        .map((f) => ({ ...f, score: scoreResult(f.result) }))
-        .sort((a, b) => b.score - a.score);
-
-      if (scored.length > 0) {
-        const winner = scored[0];
-        setResult(winner.result);
-        setStatus(`ready · auto winner: ${winner.algo}`);
+      try {
+        const result = await pollJob(ingest.jobId, (s) => {
+          const pos = Number(s.position ?? 0);
+          const eta = Number(s.etaMs ?? 0);
+          if (pos > 0 && eta > 0) {
+            setStatus(`auto: queued (position ${pos}, ~${Math.ceil(eta / 1000)}s)`);
+          }
+        });
+        setResult(result);
+        setStatus(`ready · auto winner: ${result.algorithm ?? "auto"}`);
         try {
-          const html = await fetch(`/api/jobs/${winner.result.jobId}/report`).then((r) => r.text());
+          const html = await fetch(`/api/jobs/${result.jobId}/report`).then((r) => r.text());
           setReportHtml(html);
         } catch {
           // ignore report fetch error
         }
-      } else {
+      } catch (e) {
         if (attempt < MAX_ATTEMPTS) {
-          setStatus(`auto: all algorithms failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
+          setStatus(`auto job failed, retrying in ${RETRY_DELAY / 1000}s… (${attempt}/${MAX_ATTEMPTS})`);
           setTimeout(() => submit(overridePayload, attempt + 1), RETRY_DELAY);
         } else {
-          setStatus("auto: all algorithms failed");
+          setStatus("auto: job failed");
         }
       }
       return;
@@ -1834,6 +1862,34 @@ export default function Home() {
 
       <section className="workspace">
         <WindowShell show={windows.input} onClose={() => toggleWindow("input")} className="window animate-fade-in-up stagger-1">
+          <div
+            className="drop-zone"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+            style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}
+          >
+            {isDragging && (
+              <div className="drop-overlay" style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 50,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "rgba(0,0,0,0.6)",
+                backdropFilter: "blur(4px)",
+                borderRadius: 12,
+                border: "2px dashed #00e5ff",
+              }}>
+                <span style={{ color: "#00e5ff", fontSize: 18, fontWeight: 700 }}>
+                  Drop JSON / JSONL / LOG / TXT file here
+                </span>
+              </div>
+            )}
             <div className="window-head">
               <div>
                 <h2>Input stream</h2>
@@ -1844,26 +1900,6 @@ export default function Home() {
               className={`textarea ${isDragging ? "is-dragging" : ""}`}
               value={payload}
               onChange={(e) => setPayload(e.target.value)}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragging(false);
-                const file = e.dataTransfer.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                  const text = event.target?.result as string;
-                  if (text) {
-                    setPayload(text);
-                    submit(text);
-                  }
-                };
-                reader.readAsText(file);
-              }}
             />
             <div className="controls">
               <select className="select" value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
@@ -1880,6 +1916,7 @@ export default function Home() {
                 Run analysis
               </button>
             </div>
+          </div>
         </WindowShell>
 
         <WindowShell show={windows.runState} onClose={() => toggleWindow("runState")} className="window animate-fade-in-up stagger-2">

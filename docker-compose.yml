@@ -15,8 +15,3 @@ services:
         soft: 65535
         hard: 65535
     restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: 12GB

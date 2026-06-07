@@ -106,7 +106,7 @@ void *logana_analyze_batch_task(void *arg) {
     for (size_t i = 0; i < batch->job_count; ++i) {
         logana_job_t *job = batch->jobs[i];
         if (logana_analyze_job(batch->engine, job) == 0) {
-            if (!logana_queue_push(&batch->engine->render_queue, job, 100)) {
+            if (!logana_queue_push(&batch->engine->render_queue, job, 10000)) {
                 pthread_mutex_lock(&job->lock);
                 job->status = LOGANA_JOB_FAILED;
                 snprintf(job->error, sizeof(job->error), "%s", "render queue is saturated");

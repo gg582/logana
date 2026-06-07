@@ -21,9 +21,12 @@ static size_t run_mean_shift(const logana_feature_matrix_t *matrix, double bandw
                              int *labels) {
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
+    /* Hard cap: mean-shift is O(n^2); beyond 10k rows it becomes a denial-of-service */
+    size_t step = 1;
+    if (rows > 10000) { step = rows / 10000; if (step < 1) step = 1; }
     double modes[LOGANA_MAX_DIMENSIONS * 16] = {0};
     size_t mode_count = 0;
-    for (size_t r = 0; r < rows; ++r) {
+    for (size_t r = 0; r < rows; r += step) {
         double point[LOGANA_MAX_DIMENSIONS];
         memcpy(point, matrix->values + r * dims, dims * sizeof(double));
         for (size_t iter = 0; iter < 6; ++iter) {
@@ -62,6 +65,16 @@ static int mean_shift_fit(const logana_cluster_strategy_vtable_t *self,
 
     double bandwidth = 2.0;
     size_t clusters = run_mean_shift(matrix, bandwidth, logana_distance_euclidean_sq, summary, labels);
+    /* Fill skipped rows with nearest sampled label */
+    size_t step = 1;
+    if (rows > 10000) { step = rows / 10000; if (step < 1) step = 1; }
+    if (step > 1) {
+        for (size_t r = 0; r < rows; ++r) {
+            size_t src = (r / step) * step;
+            if (src >= rows) src = rows - 1;
+            labels[r] = labels[src];
+        }
+    }
 
     out->labels = labels;
     out->is_noise = is_noise;

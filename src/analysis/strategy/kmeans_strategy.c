@@ -179,6 +179,10 @@ static size_t run_kmeans_auto(const logana_feature_matrix_t *matrix,
     size_t rows = matrix->row_count;
     if (!rows) return 0;
     if (rows == 1) { out_labels[0] = 0; return 1; }
+    /* For large matrices, avoid the expensive auto sweep and just run once */
+    if (rows > 100000) {
+        return run_kmeans(matrix, 3, 0, dist_fn, summary, out_labels);
+    }
     int *tmp_labels = calloc(rows, sizeof(int));
     int *best_labels = calloc(rows, sizeof(int));
     if (!tmp_labels || !best_labels) { free(tmp_labels); free(best_labels); return run_kmeans(matrix, 2, 0, dist_fn, summary, out_labels); }

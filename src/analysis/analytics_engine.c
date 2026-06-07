@@ -156,8 +156,8 @@ int logana_engine_init(logana_engine_t *engine, const logana_config_t *config) {
     engine->config = *config;
     ttak_logger_init(&engine->logger, logana_log_sink, TTAK_LOG_INFO);
     pthread_mutex_init(&engine->jobs_lock, NULL);
-    if (logana_queue_init(&engine->ingress_queue, 2048) != 0) return -1;
-    if (logana_queue_init(&engine->render_queue, 2048) != 0) return -1;
+    if (logana_queue_init(&engine->ingress_queue, 65536) != 0) return -1;
+    if (logana_queue_init(&engine->render_queue, 65536) != 0) return -1;
     uint64_t now = logana_now_ms();
     engine->analysis_pool = ttak_thread_pool_create(engine->config.worker_threads, 0, now);
     engine->render_pool = ttak_thread_pool_create(engine->config.async_render_threads, 0, now);
