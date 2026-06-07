@@ -6,6 +6,7 @@
 #include <cwist/core/template/template.h>
 
 #include <math.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,6 +230,12 @@ static void logana_svg_append(char *svg, const char *str, size_t cap) {
     }
 }
 
+static size_t logana_label_bucket(int label, size_t row_count) {
+    if (label < 0) return row_count;
+    if ((size_t)label >= row_count) return row_count;
+    return (size_t)label;
+}
+
 static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
     size_t cap = 131072;
     char *svg = calloc(1, cap);
@@ -264,14 +271,12 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
 
     // Compute cluster counts for radius sizing
     size_t *cluster_counts = NULL;
-    int max_label = 0;
+    size_t cluster_bucket_count = rows + 1;
     if (job->result.labels) {
-        cluster_counts = calloc(job->result.cluster_count + 1, sizeof(size_t));
+        cluster_counts = calloc(cluster_bucket_count, sizeof(size_t));
         for (size_t i = 0; i < rows; ++i) {
-            int label = job->result.labels[i];
-            if (label < 0) label = (int)job->result.cluster_count; // noise
-            if (label > max_label) max_label = label;
-            if (cluster_counts) cluster_counts[label]++;
+            size_t bucket = logana_label_bucket(job->result.labels[i], rows);
+            if (cluster_counts) cluster_counts[bucket]++;
         }
     }
 
@@ -334,15 +339,19 @@ static char *logana_build_svg(logana_engine_t *engine, logana_job_t *job) {
         double x = plot_left + nx * plot_w;
         double y = plot_bottom - ny * plot_h;
 
-        int label = job->result.labels ? job->result.labels[i] : 0;
-        bool is_noise_point = job->result.is_noise ? job->result.is_noise[i] : (label < 0);
-        if (label < 0) label = (int)job->result.cluster_count; // noise -> last color
-        const char *color = engine->config.color_palette[(size_t)abs(label) % color_count];
+        int raw_label = job->result.labels ? job->result.labels[i] : 0;
+        bool is_noise_point = job->result.is_noise ? job->result.is_noise[i] : (raw_label < 0);
+        size_t label_bucket = logana_label_bucket(raw_label, rows);
+        int label = raw_label;
+        if (label < 0) {
+            label = job->result.cluster_count <= (size_t)INT_MAX ? (int)job->result.cluster_count : -1;
+        }
+        const char *color = engine->config.color_palette[label_bucket % color_count];
 
         // Vary radius slightly by cluster density
         double radius = 4.2;
-        if (cluster_counts && label >= 0 && label <= max_label && cluster_counts[label] > 0) {
-            double density = (double)cluster_counts[label] / (double)rows;
+        if (cluster_counts && label_bucket < cluster_bucket_count && cluster_counts[label_bucket] > 0) {
+            double density = (double)cluster_counts[label_bucket] / (double)rows;
             radius = 3.0 + (1.0 - density) * 3.5;
             if (radius < 2.5) radius = 2.5;
             if (radius > 7.0) radius = 7.0;
