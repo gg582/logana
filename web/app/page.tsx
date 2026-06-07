@@ -1506,6 +1506,19 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
         const numericSummary = s.hasError ? "error" : `${s.min?.toFixed(2)} / ${s.max?.toFixed(2)} / ${s.mean?.toFixed(2)}`;
         const hasLongSample = s.sampleValues.some((v) => typeof v === "string" && v.length >= 16);
         const isWideStats = (s.numericCount > 0 && numericSummary.length >= 28) || hasLongSample;
+
+        const formatSample = (val: unknown): string => {
+          if (val === null) return "null";
+          if (typeof val === "object") {
+            try {
+              return JSON.stringify(val);
+            } catch {
+              return String(val);
+            }
+          }
+          return String(val);
+        };
+
         return (
           <div className={`stats-card${isWideStats ? " stats-card-wide" : ""} stagger-${Math.min(idx + 1, 8)}`} key={s.key}>
             <div className="stats-header">
@@ -1534,24 +1547,38 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
                 <strong><FitText minFontSize={12}>{((s.nullCount / Math.max(total, 1)) * 100).toFixed(1)}%</FitText></strong>
               </div>
               {s.sampleValues && s.sampleValues.length > 0 && (
-                <div className="stats-metric" style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "4px" }}>
+                <div className="stats-metric" style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: "4px", width: "100%", overflow: "hidden" }}>
                   <span>samples</span>
                   {hasLongSample ? (
-                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "4px", fontSize: "11px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "4px", fontSize: "11px", tableLayout: "fixed" }}>
                       <tbody>
-                        {s.sampleValues.map((val, vidx) => (
-                          <tr key={vidx} style={{ borderBottom: "1px solid var(--line)", opacity: 0.85 }}>
-                            <td style={{ padding: "4px 0", fontFamily: "var(--font-fira), monospace", color: "var(--accent-soft)", textAlign: "left", wordBreak: "break-all" }}>
-                              {String(val)}
-                            </td>
-                          </tr>
-                        ))}
+                        {s.sampleValues.map((val, vidx) => {
+                          const formatted = formatSample(val);
+                          return (
+                            <tr key={vidx} style={{ borderBottom: vidx === s.sampleValues.length - 1 ? "none" : "1px solid var(--line)", opacity: 0.85 }}>
+                              <td
+                                style={{
+                                  padding: "5px 0",
+                                  fontFamily: "var(--font-fira), monospace",
+                                  color: "var(--accent-soft)",
+                                  textAlign: "left",
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis"
+                                }}
+                                title={formatted}
+                              >
+                                {formatted}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   ) : (
                     <strong style={{ width: "100%", textAlign: "right" }}>
                       <FitText minFontSize={12}>
-                        {s.sampleValues.map((v) => String(v)).join(", ")}
+                        {s.sampleValues.map(formatSample).join(", ")}
                       </FitText>
                     </strong>
                   )}
