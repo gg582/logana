@@ -208,7 +208,8 @@ int logana_engine_init(logana_engine_t *engine, const logana_config_t *config) {
     return 0;
 }
 
-logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload, size_t payload_size, logana_algorithm_t algorithm) {
+logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload, size_t payload_size,
+                                   logana_algorithm_t algorithm, logana_cluster_options_t options) {
     logana_job_t *job = calloc(1, sizeof(*job));
     if (!job) return NULL;
     job->payload = malloc(payload_size + 1);
@@ -221,6 +222,7 @@ logana_job_t *logana_engine_submit(logana_engine_t *engine, const char *payload,
     job->job_id = atomic_fetch_add_explicit(&engine->next_job_id, 1, memory_order_relaxed);
     job->payload_size = payload_size;
     job->algorithm = algorithm;
+    job->cluster_options = options;
     uint64_t now = logana_now_ms();
     atomic_init(&job->ref_count, 1);
     atomic_init(&job->status, LOGANA_JOB_QUEUED);

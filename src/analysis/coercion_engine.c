@@ -716,8 +716,31 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
 
     char *cursor = scratch;
     while (cursor && *cursor && ctx->row_count < engine->config.max_rows_per_analysis) {
-        char *next = strchr(cursor, '\n');
-        if (next) *next = '\0';
+        while (*cursor && isspace((unsigned char)*cursor)) ++cursor;
+        if (!*cursor) break;
+
+        char *next = NULL;
+        char saved = '\0';
+        const char *parse_end = NULL;
+        cJSON *probe = NULL;
+
+        if (*cursor == '{' || *cursor == '[') {
+            probe = cJSON_ParseWithOpts(cursor, &parse_end, false);
+        }
+
+        if (probe && parse_end && parse_end > cursor) {
+            next = (char *)parse_end;
+            saved = *next;
+            *next = '\0';
+            cJSON_Delete(probe);
+        } else {
+            if (probe) cJSON_Delete(probe);
+            next = strchr(cursor, '\n');
+            if (next) {
+                saved = *next;
+                *next = '\0';
+            }
+        }
 
         if (*cursor) {
             if (ctx->row_count == ctx->row_capacity) {
@@ -781,8 +804,8 @@ int logana_coercion_parse_payload(logana_engine_t *engine, logana_job_t *job,
         }
 
         if (!next) break;
-        *next = '\n';
-        cursor = next + 1;
+        *next = saved;
+        cursor = next;
     }
 
     free(scratch);

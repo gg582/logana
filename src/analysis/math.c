@@ -684,7 +684,7 @@ void logana_compute_summary(logana_job_t *job) {
             double delta = v - job->summary.mean[d];
             wvar += delta * delta;
         }
-        job->summary.stddev[d] = sqrt(wvar / (double)n);
+        job->summary.stddev[d] = n > 1 ? sqrt(wvar / (double)(n - 1)) : 0.0;
         free(vals);
     }
 

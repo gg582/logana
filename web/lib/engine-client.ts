@@ -19,10 +19,17 @@ async function requestJson(path: string, init?: RequestInit) {
   return data;
 }
 
-export async function ingestLogs(payload: string, algorithm: string) {
+export type IngestOptions = {
+  dbscan?: {
+    eps?: number;
+    minSamples?: number;
+  };
+};
+
+export async function ingestLogs(payload: string, algorithm: string, options?: IngestOptions) {
   return requestJson("/ingest", {
     method: "POST",
-    body: JSON.stringify({ payload, algorithm }),
+    body: JSON.stringify({ payload, algorithm, options }),
   });
 }
 

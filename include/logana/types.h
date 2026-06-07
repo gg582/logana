@@ -45,6 +45,13 @@ typedef enum {
 } logana_distance_metric_t;
 
 typedef struct {
+    double dbscan_eps;
+    size_t dbscan_min_samples;
+    bool has_dbscan_eps;
+    bool has_dbscan_min_samples;
+} logana_cluster_options_t;
+
+typedef struct {
     bool case_sensitive;
     double fuzzy_threshold;
     size_t max_rows_per_analysis;
@@ -90,6 +97,7 @@ typedef struct {
     size_t cluster_count;
     double cluster_balance;      /* min/max cluster ratio; 1.0 = perfect balance */
     double schema_drift;         /* 0.0 = uniform format, 1.0 = max mixed */
+    logana_cluster_options_t cluster_options;
 } logana_analysis_summary_t;
 
 typedef struct {
@@ -124,6 +132,7 @@ typedef struct logana_job {
     size_t payload_size;
     char *payload;
     logana_algorithm_t algorithm;
+    logana_cluster_options_t cluster_options;
     logana_feature_matrix_t matrix;
     logana_analysis_summary_t summary;
     logana_cluster_result_t   result;

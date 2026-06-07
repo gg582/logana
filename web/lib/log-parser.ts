@@ -86,6 +86,56 @@ export type ParsedLogDataset = {
   cleansingReport: CleansingReport;
 };
 
+export type ParsedLogOutputMode = "dashboard" | "records" | "columns" | "summary";
+
+export type ParseLogStreamOptions<T extends ParsedLogOutputMode = "dashboard"> = {
+  output?: T;
+  includeInternalNumeric?: boolean;
+  missingValue?: number | null;
+};
+
+export type ParsedLogRecord = Record<string, unknown>;
+
+export type ParsedLogColumns = {
+  rowCount: number;
+  keys: string[];
+  columns: Record<string, unknown[]>;
+  numericKeys: string[];
+  numericColumns: Record<string, Array<number | null>>;
+  categoricalKeys: string[];
+  fieldSchemas: FieldSchema[];
+  correlations: CorrelationCell[];
+  cleansingReport: CleansingReport;
+};
+
+export type NumericFieldSummary = {
+  key: string;
+  count: number;
+  missing: number;
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  median: number | null;
+  q1: number | null;
+  q3: number | null;
+  variance: number | null;
+  stddev: number | null;
+};
+
+export type ParsedLogSummary = {
+  rowCount: number;
+  numeric: NumericFieldSummary[];
+  fields: FieldSchema[];
+  correlations: CorrelationCell[];
+  cleansingReport: CleansingReport;
+};
+
+export type ParsedLogOutput<T extends ParsedLogOutputMode> =
+  T extends "records" ? ParsedLogRecord[] :
+  T extends "columns" ? ParsedLogColumns :
+  T extends "summary" ? ParsedLogSummary :
+  ParsedLogDataset;
+
 const PALETTE = ["#22d3ee", "#a78bfa", "#f472b6", "#3b82f6", "#34d399", "#fbbf24", "#fb7185", "#60a5fa"];
 
 function isNumericLike(value: string) {
@@ -126,6 +176,60 @@ function parseJsonLine(line: string): Record<string, unknown> | null {
     // fall through
   }
   return null;
+}
+
+function splitContinuousJsonRecords(input: string): string[] {
+  const records: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+
+    if (start < 0) {
+      if (/\s/.test(ch)) continue;
+      if (ch !== "{" && ch !== "[") return [input.trim()].filter(Boolean);
+      start = i;
+      depth = 1;
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+    } else if (ch === "{" || ch === "[") {
+      depth += 1;
+    } else if (ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        records.push(input.slice(start, i + 1).trim());
+        start = -1;
+      }
+    }
+  }
+
+  if (start >= 0) return [input.trim()].filter(Boolean);
+  return records.length > 0 ? records : [input.trim()].filter(Boolean);
+}
+
+function splitLogRecords(payload: string): string[] {
+  return payload
+    .split("\n")
+    .flatMap((line) => splitContinuousJsonRecords(line))
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function flattenObject(obj: unknown, prefix = "", depth = 0): Record<string, unknown> {
@@ -348,11 +452,134 @@ function computeCorrelations(rows: ParsedLogRow[], numericKeys: string[]): Corre
   return cells;
 }
 
-export function parseLogStream(payload: string): ParsedLogDataset {
-  const lines = payload
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+function percentile(sortedValues: number[], p: number): number | null {
+  if (sortedValues.length === 0) return null;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const pos = (sortedValues.length - 1) * p;
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  if (lower === upper) return sortedValues[lower];
+  const weight = pos - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
+function numericSummary(key: string, rows: ParsedLogRow[]): NumericFieldSummary {
+  const values = rows
+    .map((row) => row.numeric[key])
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => a - b);
+
+  if (values.length === 0) {
+    return {
+      key,
+      count: 0,
+      missing: rows.length,
+      min: null,
+      max: null,
+      mean: null,
+      median: null,
+      q1: null,
+      q3: null,
+      variance: null,
+      stddev: null,
+    };
+  }
+
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  const mean = sum / values.length;
+  const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / values.length;
+
+  return {
+    key,
+    count: values.length,
+    missing: rows.length - values.length,
+    min: values[0],
+    max: values[values.length - 1],
+    mean,
+    median: percentile(values, 0.5),
+    q1: percentile(values, 0.25),
+    q3: percentile(values, 0.75),
+    variance,
+    stddev: Math.sqrt(variance),
+  };
+}
+
+function statisticalKeys(dataset: ParsedLogDataset, includeInternalNumeric: boolean) {
+  return dataset.fieldSchemas
+    .filter((s) => s.numericCount > 0 && !s.hasError)
+    .map((s) => s.key)
+    .filter((key) => includeInternalNumeric || !INTERNAL_NUMERIC_KEYS.has(key));
+}
+
+function toRecords(dataset: ParsedLogDataset): ParsedLogRecord[] {
+  return dataset.rows.map((row) => ({ ...row.fields }));
+}
+
+function toColumns(dataset: ParsedLogDataset, options: ParseLogStreamOptions<ParsedLogOutputMode>): ParsedLogColumns {
+  const keys = dataset.fieldSchemas.map((schema) => schema.key);
+  const columns: Record<string, unknown[]> = {};
+  for (const key of keys) {
+    columns[key] = dataset.rows.map((row) => row.fields[key] ?? null);
+  }
+
+  const numericKeys = statisticalKeys(dataset, options.includeInternalNumeric ?? false);
+  const missingValue = options.missingValue ?? null;
+  const numericColumns: Record<string, Array<number | null>> = {};
+  for (const key of numericKeys) {
+    numericColumns[key] = dataset.rows.map((row) => {
+      const value = row.numeric[key];
+      return typeof value === "number" && Number.isFinite(value) ? value : missingValue;
+    });
+  }
+
+  return {
+    rowCount: dataset.rows.length,
+    keys,
+    columns,
+    numericKeys,
+    numericColumns,
+    categoricalKeys: dataset.fieldSchemas
+      .filter((schema) => schema.stringCount > 0 || schema.boolCount > 0)
+      .map((schema) => schema.key),
+    fieldSchemas: dataset.fieldSchemas,
+    correlations: dataset.correlations,
+    cleansingReport: dataset.cleansingReport,
+  };
+}
+
+function toSummary(dataset: ParsedLogDataset, options: ParseLogStreamOptions<ParsedLogOutputMode>): ParsedLogSummary {
+  const numericKeys = statisticalKeys(dataset, options.includeInternalNumeric ?? false);
+  return {
+    rowCount: dataset.rows.length,
+    numeric: numericKeys.map((key) => numericSummary(key, dataset.rows)),
+    fields: dataset.fieldSchemas,
+    correlations: dataset.correlations,
+    cleansingReport: dataset.cleansingReport,
+  };
+}
+
+function formatOutput<T extends ParsedLogOutputMode>(
+  dataset: ParsedLogDataset,
+  options?: ParseLogStreamOptions<T>
+): ParsedLogOutput<T> {
+  const normalizedOptions = options ?? {};
+  const output = normalizedOptions.output ?? "dashboard";
+  if (output === "records") return toRecords(dataset) as ParsedLogOutput<T>;
+  if (output === "columns") return toColumns(dataset, normalizedOptions) as ParsedLogOutput<T>;
+  if (output === "summary") return toSummary(dataset, normalizedOptions) as ParsedLogOutput<T>;
+  return dataset as ParsedLogOutput<T>;
+}
+
+export function parseLogStream(payload: string): ParsedLogDataset;
+export function parseLogStream<T extends ParsedLogOutputMode>(
+  payload: string,
+  options: ParseLogStreamOptions<T>
+): ParsedLogOutput<T>;
+export function parseLogStream<T extends ParsedLogOutputMode = "dashboard">(
+  payload: string,
+  options?: ParseLogStreamOptions<T>
+): ParsedLogOutput<T> {
+  const lines = splitLogRecords(payload);
 
   const rows = lines.map((line, index) => {
     const jsonFields = parseJsonLine(line);
@@ -595,7 +822,7 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     categoryKey = "format";
   }
 
-  return {
+  const dataset: ParsedLogDataset = {
     rows: cleansedRows,
     histogram,
     fieldCoverage,
@@ -615,4 +842,5 @@ export function parseLogStream(payload: string): ParsedLogDataset {
     timestampKey: cleansedRows.some((row) => row.timestampLabel.startsWith("row ")) ? "row index" : "timestamp",
     cleansingReport,
   };
+  return formatOutput(dataset, options);
 }

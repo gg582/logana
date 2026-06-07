@@ -49,9 +49,13 @@ static int dbscan_fit(const logana_cluster_strategy_vtable_t *self,
     logana_distance_fn_t dist_fn = logana_distance_euclidean_sq;
     size_t min_samples = 3;
     if (rows > 100) min_samples = 5;
-    double eps = logana_knee_detect_eps(matrix, min_samples, dist_fn, summary);
-    /* Scale eps slightly to be permissive for log data */
-    eps *= 1.05;
+    if (summary->cluster_options.has_dbscan_min_samples &&
+        summary->cluster_options.dbscan_min_samples > 0) {
+        min_samples = summary->cluster_options.dbscan_min_samples;
+    }
+    double eps = summary->cluster_options.has_dbscan_eps && summary->cluster_options.dbscan_eps > 0.0
+        ? summary->cluster_options.dbscan_eps
+        : logana_knee_detect_eps(matrix, min_samples, dist_fn, summary) * 1.05;
 
     size_t clusters = run_dbscan(matrix, eps, min_samples, dist_fn, summary, labels);
 

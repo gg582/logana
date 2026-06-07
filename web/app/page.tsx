@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, isValidElement, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   parseLogStream,
   type HistogramBar,
@@ -1597,6 +1597,9 @@ function StatsGrid({ schemas }: { schemas: FieldSchema[] }) {
 export default function Home() {
   const [payload, setPayload] = useState(SAMPLE);
   const [algorithm, setAlgorithm] = useState("auto");
+  const [dbscanEps, setDbscanEps] = useState("auto");
+  const [dbscanMinSamples, setDbscanMinSamples] = useState(3);
+  const [accentColor, setAccentColor] = useState("#a78bfa");
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1676,12 +1679,22 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function clusteringOptions() {
+    const eps = Number(dbscanEps);
+    return {
+      dbscan: {
+        ...(Number.isFinite(eps) && eps > 0 ? { eps } : {}),
+        minSamples: dbscanMinSamples,
+      },
+    };
+  }
+
   async function fetchIngest(payload: string, algorithm: string, attempt: number = 1): Promise<{ jobId?: string; error?: string }> {
     try {
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ payload, algorithm }),
+        body: JSON.stringify({ payload, algorithm, options: clusteringOptions() }),
       });
       if (!res.ok) {
         throw new Error(`status ${res.status}`);
@@ -1809,7 +1822,7 @@ export default function Home() {
   }, [analytics]);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" style={{ "--accent": accentColor } as CSSProperties}>
       <section className="hero animate-fade-in-up">
         <div className="eyebrow">Realtime log workbench</div>
         <h1>Shape-aware parser. Dynamic visuals.</h1>
@@ -1882,6 +1895,35 @@ export default function Home() {
                 <option value="gmm">GMM</option>
                 <option value="agglomerative">Agglomerative</option>
               </select>
+              {algorithm === "dbscan" || algorithm === "auto" ? (
+                <>
+                  <label className="control-field">
+                    <span>eps</span>
+                    <input
+                      className="control-input"
+                      value={dbscanEps}
+                      onChange={(e) => setDbscanEps(e.target.value)}
+                      placeholder="auto"
+                      inputMode="decimal"
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>min samples</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={dbscanMinSamples}
+                      onChange={(e) => setDbscanMinSamples(Math.max(1, Number(e.target.value) || 1))}
+                    />
+                  </label>
+                </>
+              ) : null}
+              <label className="control-field control-color">
+                <span>accent</span>
+                <input type="color" value={accentColor} onChange={(e) => setAccentColor(e.target.value)} />
+              </label>
               <button className="button" onClick={() => submit()}>
                 Run analysis
               </button>

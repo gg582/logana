@@ -99,6 +99,34 @@ static logana_algorithm_t logana_parse_algorithm_json(const cJSON *body) {
     return LOGANA_ALGO_DBSCAN;
 }
 
+static const cJSON *logana_json_option_object(const cJSON *body) {
+    const cJSON *options = cJSON_GetObjectItemCaseSensitive((cJSON *)body, "options");
+    return cJSON_IsObject(options) ? options : body;
+}
+
+static logana_cluster_options_t logana_parse_cluster_options_json(const cJSON *body) {
+    logana_cluster_options_t options = {0};
+    const cJSON *root = logana_json_option_object(body);
+    const cJSON *dbscan = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan");
+    if (cJSON_IsObject(dbscan)) root = dbscan;
+
+    const cJSON *eps = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "eps");
+    if (!eps) eps = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan_eps");
+    if (cJSON_IsNumber(eps) && eps->valuedouble > 0.0) {
+        options.dbscan_eps = eps->valuedouble;
+        options.has_dbscan_eps = true;
+    }
+
+    const cJSON *min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "minSamples");
+    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "min_samples");
+    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan_min_samples");
+    if (cJSON_IsNumber(min_samples) && min_samples->valuedouble >= 1.0) {
+        options.dbscan_min_samples = (size_t)min_samples->valuedouble;
+        options.has_dbscan_min_samples = true;
+    }
+    return options;
+}
+
 static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *res) {
     if (!req->body || !req->body->data) {
         logana_send_error(res, CWIST_HTTP_BAD_REQUEST, "payload is required");
@@ -123,7 +151,8 @@ static void logana_handle_ingest(cwist_http_request *req, cwist_http_response *r
         g_engine,
         payload->valuestring,
         strlen(payload->valuestring),
-        logana_parse_algorithm_json(body));
+        logana_parse_algorithm_json(body),
+        logana_parse_cluster_options_json(body));
     cJSON_Delete(body);
 
     if (!job) {
