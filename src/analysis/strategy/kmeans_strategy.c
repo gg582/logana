@@ -86,20 +86,31 @@ static size_t run_kmeans(const logana_feature_matrix_t *matrix, size_t k, size_t
     if (!rows) return 0;
     if (k > rows) k = rows;
     if (k == 0) k = 1;
-    if (k > 8) k = 8;
+    if (summary->cluster_options.has_kmeans_max_k && summary->cluster_options.kmeans_max_k > 0) {
+        if (k > summary->cluster_options.kmeans_max_k) k = summary->cluster_options.kmeans_max_k;
+    } else {
+        if (k > 8) k = 8;
+    }
 
     double centers[LOGANA_MAX_DIMENSIONS * 8] = {0};
     double best_centers[LOGANA_MAX_DIMENSIONS * 8] = {0};
     int *tmp_labels = calloc(rows, sizeof(int));
     if (!tmp_labels) return 0;
 
-    const size_t n_init = (rows > 5000) ? 3 : 5;
+    size_t n_init = (rows > 5000) ? 3 : 5;
+    if (summary->cluster_options.has_kmeans_n_init && summary->cluster_options.kmeans_n_init > 0) {
+        n_init = summary->cluster_options.kmeans_n_init;
+    }
     double best_inertia = 1e300;
 
     for (size_t trial = 0; trial < n_init; ++trial) {
         uint64_t seed = (uint64_t)(seed_offset + trial * 31 + 0x9e3779b9);
         kmeans_pp_init(matrix, k, seed, centers, dist_fn, summary);
-        for (size_t iter = 0; iter < 30; ++iter) {
+        size_t max_iter = 30;
+        if (summary->cluster_options.has_kmeans_iterations && summary->cluster_options.kmeans_iterations > 0) {
+            max_iter = summary->cluster_options.kmeans_iterations;
+        }
+        for (size_t iter = 0; iter < max_iter; ++iter) {
             double accum[LOGANA_MAX_DIMENSIONS * 8] = {0};
             size_t counts[8] = {0};
             for (size_t r = 0; r < rows; ++r) {

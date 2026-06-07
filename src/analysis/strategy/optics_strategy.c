@@ -62,8 +62,15 @@ static int optics_fit(const logana_cluster_strategy_vtable_t *self,
     logana_distance_fn_t dist_fn = logana_distance_euclidean_sq;
     size_t min_samples = 3;
     if (rows > 100) min_samples = 5;
+    if (summary->cluster_options.has_dbscan_min_samples && summary->cluster_options.dbscan_min_samples > 0) {
+        min_samples = summary->cluster_options.dbscan_min_samples;
+    }
     double eps = logana_knee_detect_eps(matrix, min_samples, dist_fn, summary);
-    eps *= 1.2;
+    if (summary->cluster_options.has_dbscan_eps && summary->cluster_options.dbscan_eps > 0.0) {
+        eps = summary->cluster_options.dbscan_eps;
+    } else {
+        eps *= 1.2;
+    }
 
     size_t clusters = run_optics(matrix, eps, min_samples, dist_fn, summary, labels);
 

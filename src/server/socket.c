@@ -107,23 +107,96 @@ static const cJSON *logana_json_option_object(const cJSON *body) {
 static logana_cluster_options_t logana_parse_cluster_options_json(const cJSON *body) {
     logana_cluster_options_t options = {0};
     const cJSON *root = logana_json_option_object(body);
-    const cJSON *dbscan = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan");
-    if (cJSON_IsObject(dbscan)) root = dbscan;
 
-    const cJSON *eps = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "eps");
-    if (!eps) eps = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan_eps");
+    /* DBSCAN (may be nested under "dbscan" or flat for backward compat) */
+    const cJSON *dbscan = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan");
+    const cJSON *dbscan_root = cJSON_IsObject(dbscan) ? dbscan : root;
+
+    const cJSON *eps = cJSON_GetObjectItemCaseSensitive((cJSON *)dbscan_root, "eps");
+    if (!eps) eps = cJSON_GetObjectItemCaseSensitive((cJSON *)dbscan_root, "dbscan_eps");
     if (cJSON_IsNumber(eps) && eps->valuedouble > 0.0) {
         options.dbscan_eps = eps->valuedouble;
         options.has_dbscan_eps = true;
     }
 
-    const cJSON *min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "minSamples");
-    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "min_samples");
-    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "dbscan_min_samples");
+    const cJSON *min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)dbscan_root, "minSamples");
+    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)dbscan_root, "min_samples");
+    if (!min_samples) min_samples = cJSON_GetObjectItemCaseSensitive((cJSON *)dbscan_root, "dbscan_min_samples");
     if (cJSON_IsNumber(min_samples) && min_samples->valuedouble >= 1.0) {
         options.dbscan_min_samples = (size_t)min_samples->valuedouble;
         options.has_dbscan_min_samples = true;
     }
+
+    /* BIRCH */
+    const cJSON *birch = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "birch");
+    if (cJSON_IsObject(birch)) {
+        const cJSON *threshold = cJSON_GetObjectItemCaseSensitive((cJSON *)birch, "threshold");
+        if (cJSON_IsNumber(threshold) && threshold->valuedouble > 0.0) {
+            options.birch_threshold = threshold->valuedouble;
+            options.has_birch_threshold = true;
+        }
+    }
+
+    /* GMM */
+    const cJSON *gmm = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "gmm");
+    if (cJSON_IsObject(gmm)) {
+        const cJSON *max_components = cJSON_GetObjectItemCaseSensitive((cJSON *)gmm, "maxComponents");
+        if (cJSON_IsNumber(max_components) && max_components->valuedouble >= 1.0) {
+            options.gmm_max_components = (size_t)max_components->valuedouble;
+            options.has_gmm_max_components = true;
+        }
+        const cJSON *em_iterations = cJSON_GetObjectItemCaseSensitive((cJSON *)gmm, "emIterations");
+        if (cJSON_IsNumber(em_iterations) && em_iterations->valuedouble >= 1.0) {
+            options.gmm_em_iterations = (size_t)em_iterations->valuedouble;
+            options.has_gmm_em_iterations = true;
+        }
+    }
+
+    /* K-means++ */
+    const cJSON *kmeans = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "kmeans");
+    if (cJSON_IsObject(kmeans)) {
+        const cJSON *max_k = cJSON_GetObjectItemCaseSensitive((cJSON *)kmeans, "maxK");
+        if (cJSON_IsNumber(max_k) && max_k->valuedouble >= 1.0) {
+            options.kmeans_max_k = (size_t)max_k->valuedouble;
+            options.has_kmeans_max_k = true;
+        }
+        const cJSON *n_init = cJSON_GetObjectItemCaseSensitive((cJSON *)kmeans, "nInit");
+        if (cJSON_IsNumber(n_init) && n_init->valuedouble >= 1.0) {
+            options.kmeans_n_init = (size_t)n_init->valuedouble;
+            options.has_kmeans_n_init = true;
+        }
+        const cJSON *iterations = cJSON_GetObjectItemCaseSensitive((cJSON *)kmeans, "iterations");
+        if (cJSON_IsNumber(iterations) && iterations->valuedouble >= 1.0) {
+            options.kmeans_iterations = (size_t)iterations->valuedouble;
+            options.has_kmeans_iterations = true;
+        }
+    }
+
+    /* Mean Shift */
+    const cJSON *mean_shift = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "meanShift");
+    if (cJSON_IsObject(mean_shift)) {
+        const cJSON *bandwidth = cJSON_GetObjectItemCaseSensitive((cJSON *)mean_shift, "bandwidth");
+        if (cJSON_IsNumber(bandwidth) && bandwidth->valuedouble > 0.0) {
+            options.mean_shift_bandwidth = bandwidth->valuedouble;
+            options.has_mean_shift_bandwidth = true;
+        }
+        const cJSON *ms_iterations = cJSON_GetObjectItemCaseSensitive((cJSON *)mean_shift, "iterations");
+        if (cJSON_IsNumber(ms_iterations) && ms_iterations->valuedouble >= 1.0) {
+            options.mean_shift_iterations = (size_t)ms_iterations->valuedouble;
+            options.has_mean_shift_iterations = true;
+        }
+    }
+
+    /* Agglomerative */
+    const cJSON *agglomerative = cJSON_GetObjectItemCaseSensitive((cJSON *)root, "agglomerative");
+    if (cJSON_IsObject(agglomerative)) {
+        const cJSON *target_clusters = cJSON_GetObjectItemCaseSensitive((cJSON *)agglomerative, "targetClusters");
+        if (cJSON_IsNumber(target_clusters) && target_clusters->valuedouble >= 1.0) {
+            options.agglomerative_target_clusters = (size_t)target_clusters->valuedouble;
+            options.has_agglomerative_target_clusters = true;
+        }
+    }
+
     return options;
 }
 

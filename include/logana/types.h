@@ -45,10 +45,39 @@ typedef enum {
 } logana_distance_metric_t;
 
 typedef struct {
+    /* DBSCAN / OPTICS (shared) */
     double dbscan_eps;
     size_t dbscan_min_samples;
     bool has_dbscan_eps;
     bool has_dbscan_min_samples;
+
+    /* BIRCH */
+    double birch_threshold;
+    bool has_birch_threshold;
+
+    /* GMM */
+    size_t gmm_max_components;
+    size_t gmm_em_iterations;
+    bool has_gmm_max_components;
+    bool has_gmm_em_iterations;
+
+    /* K-means++ */
+    size_t kmeans_max_k;
+    size_t kmeans_n_init;
+    size_t kmeans_iterations;
+    bool has_kmeans_max_k;
+    bool has_kmeans_n_init;
+    bool has_kmeans_iterations;
+
+    /* Mean Shift */
+    double mean_shift_bandwidth;
+    size_t mean_shift_iterations;
+    bool has_mean_shift_bandwidth;
+    bool has_mean_shift_iterations;
+
+    /* Agglomerative */
+    size_t agglomerative_target_clusters;
+    bool has_agglomerative_target_clusters;
 } logana_cluster_options_t;
 
 typedef struct {

@@ -18,7 +18,7 @@ static size_t assign_cluster_modes(const double *modes, size_t mode_count, size_
 static size_t run_mean_shift(const logana_feature_matrix_t *matrix, double bandwidth,
                              logana_distance_fn_t dist_fn,
                              const logana_analysis_summary_t *summary,
-                             int *labels) {
+                             int *labels, size_t ms_iters) {
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
     /* Hard cap: mean-shift is O(n^2); beyond 10k rows it becomes a denial-of-service */
@@ -29,7 +29,7 @@ static size_t run_mean_shift(const logana_feature_matrix_t *matrix, double bandw
     for (size_t r = 0; r < rows; r += step) {
         double point[LOGANA_MAX_DIMENSIONS];
         memcpy(point, matrix->values + r * dims, dims * sizeof(double));
-        for (size_t iter = 0; iter < 6; ++iter) {
+        for (size_t iter = 0; iter < ms_iters; ++iter) {
             double accum[LOGANA_MAX_DIMENSIONS] = {0};
             size_t count = 0;
             for (size_t j = 0; j < rows; ++j) {
@@ -64,7 +64,14 @@ static int mean_shift_fit(const logana_cluster_strategy_vtable_t *self,
     if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }
 
     double bandwidth = 2.0;
-    size_t clusters = run_mean_shift(matrix, bandwidth, logana_distance_euclidean_sq, summary, labels);
+    if (summary->cluster_options.has_mean_shift_bandwidth && summary->cluster_options.mean_shift_bandwidth > 0.0) {
+        bandwidth = summary->cluster_options.mean_shift_bandwidth;
+    }
+    size_t ms_iters = 6;
+    if (summary->cluster_options.has_mean_shift_iterations && summary->cluster_options.mean_shift_iterations > 0) {
+        ms_iters = summary->cluster_options.mean_shift_iterations;
+    }
+    size_t clusters = run_mean_shift(matrix, bandwidth, logana_distance_euclidean_sq, summary, labels, ms_iters);
     /* Fill skipped rows with nearest sampled label */
     size_t step = 1;
     if (rows > 10000) { step = rows / 10000; if (step < 1) step = 1; }

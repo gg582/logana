@@ -1599,7 +1599,15 @@ export default function Home() {
   const [algorithm, setAlgorithm] = useState("auto");
   const [dbscanEps, setDbscanEps] = useState("auto");
   const [dbscanMinSamples, setDbscanMinSamples] = useState(3);
-  const [accentColor, setAccentColor] = useState("#a78bfa");
+  const [birchThreshold, setBirchThreshold] = useState("auto");
+  const [gmmMaxComponents, setGmmMaxComponents] = useState(3);
+  const [gmmEmIterations, setGmmEmIterations] = useState(8);
+  const [kmeansMaxK, setKmeansMaxK] = useState(8);
+  const [kmeansNInit, setKmeansNInit] = useState(5);
+  const [kmeansIterations, setKmeansIterations] = useState(30);
+  const [meanShiftBandwidth, setMeanShiftBandwidth] = useState("auto");
+  const [meanShiftIterations, setMeanShiftIterations] = useState(6);
+  const [agglomerativeTarget, setAgglomerativeTarget] = useState(3);
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState<Result | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1681,12 +1689,34 @@ export default function Home() {
 
   function clusteringOptions() {
     const eps = Number(dbscanEps);
-    return {
+    const birchThresh = Number(birchThreshold);
+    const msBandwidth = Number(meanShiftBandwidth);
+    const opts: import("../lib/engine-client").IngestOptions = {
       dbscan: {
         ...(Number.isFinite(eps) && eps > 0 ? { eps } : {}),
         minSamples: dbscanMinSamples,
       },
+      birch: {
+        ...(Number.isFinite(birchThresh) && birchThresh > 0 ? { threshold: birchThresh } : {}),
+      },
+      gmm: {
+        maxComponents: gmmMaxComponents,
+        emIterations: gmmEmIterations,
+      },
+      kmeans: {
+        maxK: kmeansMaxK,
+        nInit: kmeansNInit,
+        iterations: kmeansIterations,
+      },
+      meanShift: {
+        ...(Number.isFinite(msBandwidth) && msBandwidth > 0 ? { bandwidth: msBandwidth } : {}),
+        iterations: meanShiftIterations,
+      },
+      agglomerative: {
+        targetClusters: agglomerativeTarget,
+      },
     };
+    return opts;
   }
 
   async function fetchIngest(payload: string, algorithm: string, attempt: number = 1): Promise<{ jobId?: string; error?: string }> {
@@ -1822,7 +1852,7 @@ export default function Home() {
   }, [analytics]);
 
   return (
-    <main className="app-shell" style={{ "--accent": accentColor } as CSSProperties}>
+    <main className="app-shell">
       <section className="hero animate-fade-in-up">
         <div className="eyebrow">Realtime log workbench</div>
         <h1>Shape-aware parser. Dynamic visuals.</h1>
@@ -1895,7 +1925,7 @@ export default function Home() {
                 <option value="gmm">GMM</option>
                 <option value="agglomerative">Agglomerative</option>
               </select>
-              {algorithm === "dbscan" || algorithm === "auto" ? (
+              {(algorithm === "dbscan" || algorithm === "optics" || algorithm === "auto") && (
                 <>
                   <label className="control-field">
                     <span>eps</span>
@@ -1919,11 +1949,120 @@ export default function Home() {
                     />
                   </label>
                 </>
-              ) : null}
-              <label className="control-field control-color">
-                <span>accent</span>
-                <input type="color" value={accentColor} onChange={(e) => setAccentColor(e.target.value)} />
-              </label>
+              )}
+              {(algorithm === "birch" || algorithm === "auto") && (
+                <label className="control-field">
+                  <span>threshold</span>
+                  <input
+                    className="control-input"
+                    value={birchThreshold}
+                    onChange={(e) => setBirchThreshold(e.target.value)}
+                    placeholder="auto"
+                    inputMode="decimal"
+                  />
+                </label>
+              )}
+              {(algorithm === "gmm" || algorithm === "auto") && (
+                <>
+                  <label className="control-field">
+                    <span>max components</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={gmmMaxComponents}
+                      onChange={(e) => setGmmMaxComponents(Math.max(1, Math.min(5, Number(e.target.value) || 1)))}
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>EM iterations</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={gmmEmIterations}
+                      onChange={(e) => setGmmEmIterations(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                    />
+                  </label>
+                </>
+              )}
+              {(algorithm === "kmeans++" || algorithm === "auto") && (
+                <>
+                  <label className="control-field">
+                    <span>max K</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={2}
+                      max={16}
+                      value={kmeansMaxK}
+                      onChange={(e) => setKmeansMaxK(Math.max(2, Math.min(16, Number(e.target.value) || 2)))}
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>n init</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={kmeansNInit}
+                      onChange={(e) => setKmeansNInit(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>iterations</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={kmeansIterations}
+                      onChange={(e) => setKmeansIterations(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
+                    />
+                  </label>
+                </>
+              )}
+              {(algorithm === "mean_shift" || algorithm === "auto") && (
+                <>
+                  <label className="control-field">
+                    <span>bandwidth</span>
+                    <input
+                      className="control-input"
+                      value={meanShiftBandwidth}
+                      onChange={(e) => setMeanShiftBandwidth(e.target.value)}
+                      placeholder="auto"
+                      inputMode="decimal"
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>iterations</span>
+                    <input
+                      className="control-input"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={meanShiftIterations}
+                      onChange={(e) => setMeanShiftIterations(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                    />
+                  </label>
+                </>
+              )}
+              {(algorithm === "agglomerative" || algorithm === "auto") && (
+                <label className="control-field">
+                  <span>target clusters</span>
+                  <input
+                    className="control-input"
+                    type="number"
+                    min={2}
+                    max={16}
+                    value={agglomerativeTarget}
+                    onChange={(e) => setAgglomerativeTarget(Math.max(2, Math.min(16, Number(e.target.value) || 2)))}
+                  />
+                </label>
+              )}
               <button className="button" onClick={() => submit()}>
                 Run analysis
               </button>

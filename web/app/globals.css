@@ -353,7 +353,6 @@ body {
 
 .select,
 .control-input,
-.control-color input,
 .button,
 .ghost-button {
   border-radius: 999px;
@@ -450,13 +449,6 @@ body {
 .control-input {
   width: 96px;
   padding: 12px 14px;
-}
-
-.control-color input {
-  width: 48px;
-  height: 44px;
-  padding: 4px;
-  cursor: pointer;
 }
 
 /* ─────────── Metrics ─────────── */

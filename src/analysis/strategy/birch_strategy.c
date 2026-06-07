@@ -48,6 +48,9 @@ static int birch_fit(const logana_cluster_strategy_vtable_t *self,
 
     double threshold = 1.0;
     if (rows > 100) threshold = 2.0;
+    if (summary->cluster_options.has_birch_threshold && summary->cluster_options.birch_threshold > 0.0) {
+        threshold = summary->cluster_options.birch_threshold;
+    }
     size_t clusters = run_birch(matrix, threshold, logana_distance_euclidean_sq, summary, labels);
 
     out->labels = labels;

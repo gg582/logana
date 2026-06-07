@@ -24,6 +24,25 @@ export type IngestOptions = {
     eps?: number;
     minSamples?: number;
   };
+  birch?: {
+    threshold?: number;
+  };
+  gmm?: {
+    maxComponents?: number;
+    emIterations?: number;
+  };
+  kmeans?: {
+    maxK?: number;
+    nInit?: number;
+    iterations?: number;
+  };
+  meanShift?: {
+    bandwidth?: number;
+    iterations?: number;
+  };
+  agglomerative?: {
+    targetClusters?: number;
+  };
 };
 
 export async function ingestLogs(payload: string, algorithm: string, options?: IngestOptions) {

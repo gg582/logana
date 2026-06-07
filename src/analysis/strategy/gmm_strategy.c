@@ -5,22 +5,22 @@
 
 static size_t run_gmm(const logana_feature_matrix_t *matrix, size_t k,
                       const logana_analysis_summary_t *summary,
-                      int *labels) {
+                      int *labels, size_t em_iters) {
     size_t rows = matrix->row_count;
     size_t dims = matrix->dimensions;
-    if (k > 3) k = 3;
-    double means[LOGANA_MAX_DIMENSIONS * 3] = {0};
-    double variances[LOGANA_MAX_DIMENSIONS * 3] = {0};
-    double weights[3] = {0.34, 0.33, 0.33};
+    if (k > 5) k = 5;
+    double means[LOGANA_MAX_DIMENSIONS * 5] = {0};
+    double variances[LOGANA_MAX_DIMENSIONS * 5] = {0};
+    double weights[5] = {0.20, 0.20, 0.20, 0.20, 0.20};
     for (size_t c = 0; c < k; ++c) {
         memcpy(means + c * dims, matrix->values + (c % rows) * dims, dims * sizeof(double));
         for (size_t d = 0; d < dims; ++d) variances[c * dims + d] = 1.0;
     }
-    for (size_t iter = 0; iter < 8; ++iter) {
-        double resp_sum[3] = {0};
-        double mean_accum[LOGANA_MAX_DIMENSIONS * 3] = {0};
+    for (size_t iter = 0; iter < em_iters; ++iter) {
+        double resp_sum[5] = {0};
+        double mean_accum[LOGANA_MAX_DIMENSIONS * 5] = {0};
         for (size_t r = 0; r < rows; ++r) {
-            double probs[3] = {0};
+            double probs[5] = {0};
             double norm = 0.0;
             for (size_t c = 0; c < k; ++c) {
                 double dist = 0.0;
@@ -71,8 +71,15 @@ static int gmm_fit(const logana_cluster_strategy_vtable_t *self,
     if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }
 
     size_t k = 3;
+    if (summary->cluster_options.has_gmm_max_components && summary->cluster_options.gmm_max_components > 0) {
+        k = summary->cluster_options.gmm_max_components;
+    }
     if (rows < k) k = rows;
-    run_gmm(matrix, k, summary, labels);
+    size_t em_iters = 8;
+    if (summary->cluster_options.has_gmm_em_iterations && summary->cluster_options.gmm_em_iterations > 0) {
+        em_iters = summary->cluster_options.gmm_em_iterations;
+    }
+    run_gmm(matrix, k, summary, labels, em_iters);
 
     out->labels = labels;
     out->is_noise = is_noise;

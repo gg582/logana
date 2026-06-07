@@ -52,6 +52,9 @@ static int agglomerative_fit(const logana_cluster_strategy_vtable_t *self,
     if (!labels || !is_noise) { free(labels); free(is_noise); return -1; }
 
     size_t target = 3;
+    if (summary->cluster_options.has_agglomerative_target_clusters && summary->cluster_options.agglomerative_target_clusters > 0) {
+        target = summary->cluster_options.agglomerative_target_clusters;
+    }
     if (target > rows) target = rows;
     run_agglomerative(matrix, target, logana_distance_euclidean_sq, summary, labels);
 
