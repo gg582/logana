@@ -9,6 +9,7 @@ async function requestJson(path: string, init?: RequestInit) {
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(30000),
   });
 
   const text = await response.text();

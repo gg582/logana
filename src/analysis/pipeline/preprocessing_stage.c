@@ -1,5 +1,6 @@
 #include "logana/pipeline.h"
 #include "logana/coercion.h"
+#include <stdlib.h>
 #include <string.h>
 
 static int preprocessing_init(void *state, const logana_config_t *config) {
@@ -13,17 +14,21 @@ static int preprocessing_process(void *state, logana_pipeline_context_t *ctx) {
     logana_job_t *job = ctx->job;
 
     /* Polymorphic coercion pipeline (Rules 1-5) */
-    logana_coercion_context_t coerced;
-    if (logana_coercion_init(&coerced) != 0) return -1;
-    if (logana_coercion_parse_payload(engine, job, &coerced) != 0) {
-        logana_coercion_destroy(&coerced);
+    logana_coercion_context_t *coerced = calloc(1, sizeof(*coerced));
+    if (!coerced) return -1;
+    if (logana_coercion_init(coerced) != 0) { free(coerced); return -1; }
+    if (logana_coercion_parse_payload(engine, job, coerced) != 0) {
+        logana_coercion_destroy(coerced);
+        free(coerced);
         return -1;
     }
-    if (logana_coercion_export_matrix(&coerced, job, engine) != 0) {
-        logana_coercion_destroy(&coerced);
+    if (logana_coercion_export_matrix(coerced, job, engine) != 0) {
+        logana_coercion_destroy(coerced);
+        free(coerced);
         return -1;
     }
-    logana_coercion_destroy(&coerced);
+    logana_coercion_destroy(coerced);
+    free(coerced);
 
     logana_compute_summary(job);
 

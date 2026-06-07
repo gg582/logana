@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { enqueueJob } from "../../../lib/scheduler";
+import { ingestLogs } from "../../../lib/engine-client";
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,15 +9,10 @@ export async function POST(request: NextRequest) {
     if (!payload.trim()) {
       return NextResponse.json({ error: "payload is required" }, { status: 400 });
     }
-    const job = enqueueJob(payload, algorithm);
-    return NextResponse.json({
-      jobId: job.id,
-      status: job.status,
-      position: 1,
-      etaMs: 0,
-    });
+    const res = await ingestLogs(payload, algorithm);
+    return NextResponse.json(res);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "enqueue failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "ingest failed";
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

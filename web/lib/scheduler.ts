@@ -20,6 +20,7 @@ const MEM_THRESHOLD = 0.05;
 const DEFAULT_AVG_MS = 3000;
 const MAX_HISTORY = 10;
 const TICK_MS = 1000;
+const ENGINE_REQ_TIMEOUT_MS = 30000;
 
 let pendingJobs: SchedulerJob[] = [];
 const activeJobs = new Map<string, SchedulerJob>();
@@ -168,23 +169,29 @@ async function ingestWithRetry(payload: string, algorithm: string, maxRetries = 
   throw lastError ?? new Error("ingest failed after max retries");
 }
 
+let isTickRunning = false;
 setInterval(async () => {
-  if (activeJobs.size >= MAX_CONCURRENT) return;
-  if (!isResourceAvailable()) return;
-  if (pendingJobs.length === 0) return;
-
-  const job = pendingJobs.shift()!;
+  if (isTickRunning) return;
+  isTickRunning = true;
   try {
-    const res = await ingestWithRetry(job.payload, job.algorithm);
-    job.engineJobId = res.jobId;
-    job.status = "submitted";
-    job.submittedAt = Date.now();
-    activeJobs.set(job.id, job);
-    monitorEngineJob(job);
-  } catch (e) {
-    job.status = "failed";
-    job.error = e instanceof Error ? e.message : String(e);
-    job.completedAt = Date.now();
-    completedJobs.set(job.id, job);
+    while (activeJobs.size < MAX_CONCURRENT && pendingJobs.length > 0 && isResourceAvailable()) {
+      const job = pendingJobs.shift()!;
+      try {
+        const res = await ingestWithRetry(job.payload, job.algorithm);
+        job.engineJobId = res.jobId;
+        job.status = "submitted";
+        job.submittedAt = Date.now();
+        activeJobs.set(job.id, job);
+        monitorEngineJob(job);
+      } catch (e) {
+        job.status = "failed";
+        job.error = e instanceof Error ? e.message : String(e);
+        job.completedAt = Date.now();
+        job.result = { status: "failed", error: job.error, jobId: job.id };
+        completedJobs.set(job.id, job);
+      }
+    }
+  } finally {
+    isTickRunning = false;
   }
 }, TICK_MS);

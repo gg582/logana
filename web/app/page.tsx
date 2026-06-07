@@ -1635,17 +1635,23 @@ export default function Home() {
     setReportHtml(null);
 
     async function pollJob(jobId: string, onStatus: (s: Record<string, unknown>) => void): Promise<Result> {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         const tick = setInterval(async () => {
           try {
             const s = (await fetch(`/api/jobs/${jobId}/status`).then((r) => r.json())) as Record<string, unknown>;
             onStatus(s);
             if (s.status === "ready" || s.status === "failed") {
               clearInterval(tick);
-              const res = (await fetch(`/api/jobs/${jobId}`).then((r) => r.json())) as Result;
+              const resultRes = await fetch(`/api/jobs/${jobId}`);
+              if (!resultRes.ok) {
+                const errText = await resultRes.text().catch(() => "unknown error");
+                reject(new Error(`result fetch failed: ${resultRes.status} ${errText}`));
+                return;
+              }
+              const res = (await resultRes.json()) as Result;
               resolve(res);
             }
-          } catch {
+          } catch (e) {
             /* Ignore transient network errors and keep polling */
           }
         }, 2000);
